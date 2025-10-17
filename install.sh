@@ -226,6 +226,58 @@ if true; then
             GOST_VERSION=$(gost -V 2>/dev/null \vert{} head -n 1 \vert{}\vert{} echo "未知版本")
             log_info "GOST 版本: $GOST_VERSION"
         fi
+
+        # 创建 GOST 配置目录
+        log_info "创建 GOST 配置目录..."
+        mkdir -p /etc/gost
+
+        # 创建 GOST 示例配置文件
+        if [ ! -f /etc/gost/gost.yaml ]; then
+            log_info "创建 GOST 示例配置文件..."
+            cat > /etc/gost/gost.yaml << 'GOSTEOF'
+# GOST 配置文件示例
+# 请根据实际需求修改此配置
+
+# 服务配置
+services:
+  - name: service-0
+    addr: ":8080"
+    handler:
+      type: auto
+    listener:
+      type: tcp
+GOSTEOF
+            log_info "已创建示例配置: /etc/gost/gost.yaml"
+        fi
+
+        # 创建 systemd 服务文件
+        log_info "创建 GOST systemd 服务..."
+        cat > /etc/systemd/system/gost.service << 'SERVICEEOF'
+[Unit]
+Description=Gost Proxy Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/etc/gost
+ExecStart=/usr/local/bin/gost -C /etc/gost/gost.yaml
+StandardOutput=null
+StandardError=null
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+SERVICEEOF
+
+        # 重载 systemd
+        log_info "配置 GOST 服务..."
+        systemctl daemon-reload
+        log_info "✓ GOST 服务文件已创建"
+        log_info "提示: 修改配置后使用 'systemctl start gost' 启动服务"
+        log_info "提示: 设置开机自启: 'systemctl enable gost'"
     else
         log_warn "GOST 安装可能失败（退出码: $GOST_EXIT_CODE），请手动检查"
     fi
@@ -378,8 +430,15 @@ if command -v XrayR >/dev/null 2>&1 || [ -f /etc/XrayR/config.yml ]; then
 fi
 
 if command -v gost >/dev/null 2>&1; then
-    GOST_VER=$(gost -V 2>/dev/null | head -n 1 || echo "已安装")
+    GOST_VER=$(gost -V 2>/dev/null \vert{} head -n 1 \vert{}\vert{} echo "已安装")
     echo "  ✓ GOST ($GOST_VER)"
+    if systemctl is-active --quiet gost 2>/dev/null; then
+        echo "    状态: 运行中"
+    elif systemctl is-enabled --quiet gost 2>/dev/null; then
+        echo "    状态: 已启用（未运行）"
+    else
+        echo "    状态: 未启用"
+    fi
 fi
 
 # 配置文件位置
@@ -389,6 +448,9 @@ echo "  • XrayR 配置: /etc/XrayR/config.yml"
 echo "  • 审计规则: /etc/XrayR/rulelist"
 echo "  • GeoSite: /etc/XrayR/geosite.dat"
 echo "  • GeoIP: /etc/XrayR/geoip.dat"
+if [ -f /etc/gost/gost.yaml ]; then
+    echo "  • GOST 配置: /etc/gost/gost.yaml"
+fi
 
 # 常用命令提示
 echo ""
@@ -407,14 +469,26 @@ if command -v gost >/dev/null 2>&1; then
     echo "  • 查看版本: gost -V"
     echo "  • 查看帮助: gost -h"
     echo "  • 示例转发: gost -L=:8080 -F=proxy_server:port"
+    echo ""
+    echo -e "${BLUE}GOST 服务管理：${NC}"
+    echo "  • 启动服务: systemctl start gost"
+    echo "  • 停止服务: systemctl stop gost"
+    echo "  • 重启服务: systemctl restart gost"
+    echo "  • 查看状态: systemctl status gost"
+    echo "  • 查看日志: journalctl -u gost -f"
+    echo "  • 编辑配置: vim /etc/gost/gost.yaml"
 fi
 
 echo ""
 echo -e "${GREEN}================================================================${NC}"
-echo -e "${GREEN}脚本执行完成！请根据实际需求修改 /etc/XrayR/config.yml${NC}"
+echo -e "${GREEN}脚本执行完成！请根据实际需求修改配置文件${NC}"
 echo -e "${GREEN}================================================================${NC}"
 echo ""
-echo -e "${YELLOW}提示: 使用 'vim /etc/XrayR/config.yml' 编辑配置文件${NC}"
+echo -e "${YELLOW}提示:${NC}"
+echo -e "${YELLOW}  • XrayR 配置: vim /etc/XrayR/config.yml${NC}"
+if [ -f /etc/gost/gost.yaml ]; then
+    echo -e "${YELLOW}  • GOST 配置: vim /etc/gost/gost.yaml (配置后执行 systemctl restart gost)${NC}"
+fi
 echo ""
 
 exit 0
