@@ -76,12 +76,12 @@ log_info "检查并安装必要的依赖..."
 OS_TYPE=$(detect_os)
 
 case $OS_TYPE in
-    ubuntu\vert{}debian)
+    ubuntu|debian)
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq
         apt-get install -y curl wget bc vim net-tools >/dev/null 2>&1
         ;;
-    centos\vert{}rhel\vert{}fedora)
+    centos|rhel|fedora)
         yum install -y curl wget bc vim net-tools >/dev/null 2>&1
         ;;
     alpine)
@@ -196,8 +196,9 @@ fi
 # ============================================
 log_step "2. 安装 XrayR..."
 
-if wget -N https://raw.githubusercontent.com/put-go/XrayR-release/refs/heads/master/install.sh 2>/dev/null; then
-    bash install.sh
+if wget -N -O xrayr-install.sh https://raw.githubusercontent.com/put-go/XrayR-release/refs/heads/master/install.sh 2>/dev/null; then
+    bash xrayr-install.sh
+    rm -f xrayr-install.sh
     log_info "XrayR 安装完成"
 else
     log_error "XrayR 安装脚本下载失败"
@@ -223,7 +224,7 @@ if true; then
 
         # 检查 GOST 是否可用
         if command -v gost >/dev/null 2>&1; then
-            GOST_VERSION=$(gost -V 2>/dev/null \vert{} head -n 1 \vert{}\vert{} echo "未知版本")
+            GOST_VERSION=$(gost -V 2>/dev/null | head -n 1 || echo "未知版本")
             log_info "GOST 版本: $GOST_VERSION"
         fi
 
@@ -330,7 +331,7 @@ log_step "6. 配置审计规则..."
 
 sleep 2  # 等待配置文件生成
 if ls /etc/XrayR*/config.yml 1> /dev/null 2>&1; then
-    sed -i 's\vert{}RuleListPath: # /etc/XrayR/rulelist.*\vert{}RuleListPath: /etc/XrayR/rulelist\vert{}' /etc/XrayR*/config.yml 2>/dev/null \vert{}\vert{} true
+    sed -i 's|RuleListPath: # /etc/XrayR/rulelist.*|RuleListPath: /etc/XrayR/rulelist|' /etc/XrayR*/config.yml 2>/dev/null || true
 
     if wget -N https://raw.githubusercontent.com/put-go/blockList/main/blockList -O /etc/XrayR/rulelist 2>/dev/null; then
         log_info "审计规则配置完成"
@@ -364,12 +365,12 @@ echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     log_info "开始性能测试..."
 
-    if wget -N http://raw.githubusercontent.com/sshpc/FastBench/main/FastBench.sh 2>/dev/null; then
-        chmod +x FastBench.sh
+    if wget -N -O fastbench.sh http://raw.githubusercontent.com/sshpc/FastBench/main/FastBench.sh 2>/dev/null; then
+        chmod +x fastbench.sh
 
         # 临时禁用错误立即退出
         set +e
-        ./FastBench.sh
+        bash fastbench.sh
         BENCH_EXIT_CODE=$?
         set -e
 
@@ -385,6 +386,8 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
                 log_warn "性能测试异常退出（退出码: $BENCH_EXIT_CODE），可继续"
                 ;;
         esac
+
+        rm -f fastbench.sh
     else
         log_warn "性能测试脚本下载失败，跳过此步骤"
     fi
@@ -398,9 +401,10 @@ fi
 if [ "$OS_TYPE" = "alpine" ]; then
     log_step "9. Alpine 系统特殊配置..."
     log_info "安装 Alpine XrayR..."
-    if wget -N https://raw.githubusercontent.com/put-go/alpineXrayR/refs/heads/main/XrayR_Alpine/install-xrayr.sh 2>/dev/null; then
-        chmod +x install-xrayr.sh
-        bash install-xrayr.sh
+    if wget -N -O alpine-xrayr-install.sh https://raw.githubusercontent.com/put-go/alpineXrayR/refs/heads/main/XrayR_Alpine/install-xrayr.sh 2>/dev/null; then
+        chmod +x alpine-xrayr-install.sh
+        bash alpine-xrayr-install.sh
+        rm -f alpine-xrayr-install.sh
         log_info "Alpine XrayR 安装完成"
     else
         log_warn "Alpine XrayR 安装脚本下载失败"
@@ -461,7 +465,7 @@ if command -v XrayR >/dev/null 2>&1 || [ -f /etc/XrayR/config.yml ]; then
 fi
 
 if command -v gost >/dev/null 2>&1; then
-    GOST_VER=$(gost -V 2>/dev/null \vert{} head -n 1 \vert{}\vert{} echo "已安装")
+    GOST_VER=$(gost -V 2>/dev/null | head -n 1 || echo "已安装")
     echo "  ✓ GOST ($GOST_VER)"
     if systemctl is-active --quiet gost 2>/dev/null; then
         echo "    状态: 运行中"
