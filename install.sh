@@ -359,7 +359,38 @@ log_info "Vim 配置完成"
 # ============================================
 log_step "8. 性能测试..."
 
-log_info "已跳过性能测试（如需测试请手动运行）"
+read -p "是否进行服务器性能测试？(y/n，默认n): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    log_info "开始性能测试..."
+
+    if wget -N http://raw.githubusercontent.com/sshpc/FastBench/main/FastBench.sh 2>/dev/null; then
+        chmod +x FastBench.sh
+
+        # 临时禁用错误立即退出
+        set +e
+        ./FastBench.sh
+        BENCH_EXIT_CODE=$?
+        set -e
+
+        # 友好的退出码处理
+        case $BENCH_EXIT_CODE in
+            0)
+                log_info "✓ 性能测试完成"
+                ;;
+            1)
+                log_info "✓ 性能测试完成（含警告）"
+                ;;
+            *)
+                log_warn "性能测试异常退出（退出码: $BENCH_EXIT_CODE），可继续"
+                ;;
+        esac
+    else
+        log_warn "性能测试脚本下载失败，跳过此步骤"
+    fi
+else
+    log_info "已跳过性能测试"
+fi
 
 # ============================================
 # 步骤 9: Alpine 特殊处理
