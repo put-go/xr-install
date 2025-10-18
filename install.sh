@@ -419,17 +419,17 @@ fi
 # ============================================
 # 步骤 9: 设置命令快捷方式
 # ============================================
-log_step "9. 设置命令快捷方式..."
-log_info "设置命令快捷方式..."
+# log_step "9. 设置命令快捷方式..."
+# log_info "设置命令快捷方式..."
 
-if curl -o /usr/bin/XrayR -Ls https://raw.githubusercontent.com/XrayR-project/XrayR-release/master/XrayR.sh 2>/dev/null; then
-    chmod +x /usr/bin/XrayR
-    ln -sf /usr/bin/XrayR /usr/bin/xrayr
-    log_info "命令快捷方式设置完成"
-    log_info "现在可以使用 'XrayR' 或 'xrayr' 命令管理服务"
-else
-    log_warn "快捷方式脚本下载失败"
-fi
+# if curl -o /usr/bin/XrayR -Ls https://raw.githubusercontent.com/XrayR-project/XrayR-release/master/XrayR.sh 2>/dev/null; then
+#     chmod +x /usr/bin/XrayR
+#     ln -sf /usr/bin/XrayR /usr/bin/xrayr
+#     log_info "命令快捷方式设置完成"
+#     log_info "现在可以使用 'XrayR' 或 'xrayr' 命令管理服务"
+# else
+#     log_warn "快捷方式脚本下载失败"
+# fi
 
 # ============================================
 # 步骤 10: 清理临时文件
