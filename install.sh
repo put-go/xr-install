@@ -3,12 +3,13 @@
 #================================================================
 # XrayR 自动化安装配置脚本
 # 功能：安装 XrayR、GOST、配置审计规则、系统优化、网络加速
+# 支持：Ubuntu/Debian/CentOS/Alpine
 #================================================================
 
-set -e  # 遇到错误立即退出
+set -e # 遇到错误立即退出
 
 echo "========================================="
-echo "  XrayR 自动化安装配置脚本"
+echo " XrayR 自动化安装配置脚本"
 echo "========================================="
 
 # 颜色定义
@@ -58,6 +59,10 @@ check_root() {
 
 check_root
 
+# 检测操作系统
+OS_TYPE=$(detect_os)
+log_info "检测到操作系统: $OS_TYPE"
+
 # ============================================
 # 步骤 0: 系统初始化
 # ============================================
@@ -73,8 +78,6 @@ fi
 
 # 安装必要的依赖
 log_info "检查并安装必要的依赖..."
-OS_TYPE=$(detect_os)
-
 case $OS_TYPE in
     ubuntu|debian)
         export DEBIAN_FRONTEND=noninteractive
@@ -85,21 +88,21 @@ case $OS_TYPE in
         yum install -y curl wget bc vim net-tools >/dev/null 2>&1
         ;;
     alpine)
-        apk add --no-cache curl wget bc bash vim >/dev/null 2>&1
+        apk add --no-cache curl wget bc bash vim net-tools >/dev/null 2>&1
         ;;
     *)
         log_warn "未知系统类型，尝试继续..."
         ;;
 esac
+
 log_info "依赖安装完成"
 
 # ============================================
 # 步骤 1: 系统内核优化 (BBR + 网络优化)
 # ============================================
-log_step "1. 系统内核优化..."
-
-log_info "配置系统内核参数..."
-if true; then
+if [ "$OS_TYPE" != "alpine" ]; then
+    log_step "1. 系统内核优化..."
+    log_info "配置系统内核参数..."
 
     # 备份原配置
     if [ -f /etc/sysctl.conf ]; then
@@ -174,7 +177,6 @@ EOF
     # 应用配置
     log_info "应用内核参数..."
     sysctl -p >/dev/null 2>&1
-    sysctl --system >/dev/null 2>&1
 
     # 验证 BBR
     if sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q bbr; then
@@ -189,6 +191,9 @@ EOF
     fi
 
     log_info "系统内核优化完成"
+else
+    log_step "1. 跳过内核优化 (Alpine 系统)"
+    log_info "Alpine 系统使用精简内核，跳过内核优化步骤"
 fi
 
 # ============================================
@@ -196,49 +201,60 @@ fi
 # ============================================
 log_step "2. 安装 XrayR..."
 
-if wget -N -O xrayr-install.sh https://raw.githubusercontent.com/put-go/XrayR-release/refs/heads/master/install.sh 2>/dev/null; then
-    bash xrayr-install.sh
-    rm -f xrayr-install.sh
-    log_info "XrayR 安装完成"
+if [ "$OS_TYPE" = "alpine" ]; then
+    log_info "检测到 Alpine 系统，安装 Alpine 专用版本..."
+    if wget -N -O alpine-xrayr-install.sh https://raw.githubusercontent.com/put-go/alpineXrayR/refs/heads/main/XrayR_Alpine/install-xrayr.sh 2>/dev/null; then
+        chmod +x alpine-xrayr-install.sh
+        bash alpine-xrayr-install.sh
+        rm -f alpine-xrayr-install.sh
+        log_info "Alpine XrayR 安装完成"
+    else
+        log_error "Alpine XrayR 安装脚本下载失败"
+        exit 1
+    fi
 else
-    log_error "XrayR 安装脚本下载失败"
-    exit 1
+    log_info "安装标准版 XrayR..."
+    if wget -N -O xrayr-install.sh https://raw.githubusercontent.com/put-go/XrayR-release/refs/heads/master/install.sh 2>/dev/null; then
+        bash xrayr-install.sh
+        rm -f xrayr-install.sh
+        log_info "XrayR 安装完成"
+    else
+        log_error "XrayR 安装脚本下载失败"
+        exit 1
+    fi
 fi
 
 # ============================================
 # 步骤 3: 安装 GOST
 # ============================================
 log_step "3. 安装 GOST..."
-
 log_info "开始安装 GOST..."
-if true; then
 
-    # 临时禁用 set -e 避免 GOST 安装脚本的退出码影响
-    set +e
-    bash <(curl -fsSL https://github.com/go-gost/gost/raw/master/install.sh)
-    GOST_EXIT_CODE=$?
-    set -e
+# 临时禁用 set -e 避免 GOST 安装脚本的退出码影响
+set +e
+bash <(curl -fsSL https://github.com/go-gost/gost/raw/master/install.sh)
+GOST_EXIT_CODE=$?
+set -e
 
-    if [ $GOST_EXIT_CODE -eq 0 ]; then
-        log_info "✓ GOST 安装完成"
+if [ $GOST_EXIT_CODE -eq 0 ]; then
+    log_info "✓ GOST 安装完成"
 
-        # 检查 GOST 是否可用
-        if command -v gost >/dev/null 2>&1; then
-            GOST_VERSION=$(gost -V 2>/dev/null | head -n 1 || echo "未知版本")
-            log_info "GOST 版本: $GOST_VERSION"
-        fi
+    # 检查 GOST 是否可用
+    if command -v gost >/dev/null 2>&1; then
+        GOST_VERSION=$(gost -V 2>/dev/null | head -n 1 || echo "未知版本")
+        log_info "GOST 版本: $GOST_VERSION"
+    fi
 
-        # 创建 GOST 配置目录
-        log_info "创建 GOST 配置目录..."
-        mkdir -p /etc/gost
+    # 创建 GOST 配置目录
+    log_info "创建 GOST 配置目录..."
+    mkdir -p /etc/gost
 
-        # 创建 GOST 示例配置文件
-        if [ ! -f /etc/gost/gost.yaml ]; then
-            log_info "创建 GOST 示例配置文件..."
-            cat > /etc/gost/gost.yaml << 'GOSTEOF'
+    # 创建 GOST 示例配置文件
+    if [ ! -f /etc/gost/gost.yaml ]; then
+        log_info "创建 GOST 示例配置文件..."
+        cat > /etc/gost/gost.yaml << 'GOSTEOF'
 # GOST 配置文件示例
 # 请根据实际需求修改此配置
-
 # 服务配置
 services:
   - name: service-0
@@ -248,12 +264,12 @@ services:
     listener:
       type: tcp
 GOSTEOF
-            log_info "已创建示例配置: /etc/gost/gost.yaml"
-        fi
+        log_info "已创建示例配置: /etc/gost/gost.yaml"
+    fi
 
-        # 创建 systemd 服务文件
-        log_info "创建 GOST systemd 服务..."
-        cat > /etc/systemd/system/gost.service << 'SERVICEEOF'
+    # 创建 systemd 服务文件
+    log_info "创建 GOST systemd 服务..."
+    cat > /etc/systemd/system/gost.service << 'SERVICEEOF'
 [Unit]
 Description=Gost Proxy Service
 After=network.target
@@ -273,15 +289,14 @@ RestartSec=5s
 WantedBy=multi-user.target
 SERVICEEOF
 
-        # 重载 systemd
-        log_info "配置 GOST 服务..."
-        systemctl daemon-reload
-        log_info "✓ GOST 服务文件已创建"
-        log_info "提示: 修改配置后使用 'systemctl start gost' 启动服务"
-        log_info "提示: 设置开机自启: 'systemctl enable gost'"
-    else
-        log_warn "GOST 安装可能失败（退出码: $GOST_EXIT_CODE），请手动检查"
-    fi
+    # 重载 systemd
+    log_info "配置 GOST 服务..."
+    systemctl daemon-reload
+    log_info "✓ GOST 服务文件已创建"
+    log_info "提示: 修改配置后使用 'systemctl start gost' 启动服务"
+    log_info "提示: 设置开机自启: 'systemctl enable gost'"
+else
+    log_warn "GOST 安装可能失败（退出码: $GOST_EXIT_CODE），请手动检查"
 fi
 
 # ============================================
@@ -328,8 +343,8 @@ fi
 # 步骤 6: 配置审计规则
 # ============================================
 log_step "6. 配置审计规则..."
+sleep 2 # 等待配置文件生成
 
-sleep 2  # 等待配置文件生成
 if ls /etc/XrayR*/config.yml 1> /dev/null 2>&1; then
     sed -i 's|RuleListPath: # /etc/XrayR/rulelist.*|RuleListPath: /etc/XrayR/rulelist|' /etc/XrayR*/config.yml 2>/dev/null || true
 
@@ -346,22 +361,23 @@ fi
 # 步骤 7: 配置 Vim 编辑器
 # ============================================
 log_step "7. 配置 Vim 编辑器..."
-
 touch ~/.vimrc
-for config in "set mouse-=a" "set paste" "syntax on" ; do
+
+for config in "set mouse-=a" "set paste" "syntax on"; do
     if ! grep -q "^$config" ~/.vimrc 2>/dev/null; then
         echo "$config" >> ~/.vimrc
     fi
 done
+
 log_info "Vim 配置完成"
 
 # ============================================
 # 步骤 8: 性能测试（可选）
 # ============================================
 log_step "8. 性能测试..."
-
 read -p "是否进行服务器性能测试？(y/n，默认n): " -n 1 -r
 echo
+
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     log_info "开始性能测试..."
 
@@ -396,27 +412,11 @@ else
 fi
 
 # ============================================
-# 步骤 9: Alpine 特殊处理
+# 步骤 9: 设置命令快捷方式
 # ============================================
-if [ "$OS_TYPE" = "alpine" ]; then
-    log_step "9. Alpine 系统特殊配置..."
-    log_info "安装 Alpine XrayR..."
-    if wget -N -O alpine-xrayr-install.sh https://raw.githubusercontent.com/put-go/alpineXrayR/refs/heads/main/XrayR_Alpine/install-xrayr.sh 2>/dev/null; then
-        chmod +x alpine-xrayr-install.sh
-        bash alpine-xrayr-install.sh
-        rm -f alpine-xrayr-install.sh
-        log_info "Alpine XrayR 安装完成"
-    else
-        log_warn "Alpine XrayR 安装脚本下载失败"
-    fi
-fi
-
-# ============================================
-# 步骤 10: 设置命令快捷方式
-# ============================================
-log_step "10. 设置命令快捷方式..."
-
+log_step "9. 设置命令快捷方式..."
 log_info "设置命令快捷方式..."
+
 if curl -o /usr/bin/XrayR -Ls https://raw.githubusercontent.com/XrayR-project/XrayR-release/master/XrayR.sh 2>/dev/null; then
     chmod +x /usr/bin/XrayR
     ln -sf /usr/bin/XrayR /usr/bin/xrayr
@@ -427,10 +427,10 @@ else
 fi
 
 # ============================================
-# 步骤 11: 清理临时文件
+# 步骤 10: 清理临时文件
 # ============================================
-log_step "11. 清理临时文件..."
-rm -f install.sh FastBench.sh install-xrayr.sh
+log_step "10. 清理临时文件..."
+rm -f install.sh FastBench.sh install-xrayr.sh alpine-xrayr-install.sh xrayr-install.sh
 log_info "临时文件清理完成"
 
 # ============================================
@@ -441,15 +441,20 @@ echo "========================================="
 log_info "所有操作已完成！"
 echo "========================================="
 echo ""
-echo -e "${BLUE}系统信息：${NC}"
-echo "  • 操作系统: $OS_TYPE"
-echo "  • 主机名: $HOSTNAME"
 
-# 获取 BBR 和 IPv6 状态
-BBR_STATUS=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}' || echo "未知")
-IPV6_STATUS=$(sysctl net.ipv6.conf.all.disable_ipv6 2>/dev/null | awk '{print $3}' || echo "未知")
-echo "  • BBR 状态: $BBR_STATUS"
-echo "  • IPv6 禁用: $IPV6_STATUS"
+echo -e "${BLUE}系统信息：${NC}"
+echo " • 操作系统: $OS_TYPE"
+echo " • 主机名: $HOSTNAME"
+
+# 获取 BBR 和 IPv6 状态（仅非 Alpine）
+if [ "$OS_TYPE" != "alpine" ]; then
+    BBR_STATUS=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}' || echo "未知")
+    IPV6_STATUS=$(sysctl net.ipv6.conf.all.disable_ipv6 2>/dev/null | awk '{print $3}' || echo "未知")
+    echo " • BBR 状态: $BBR_STATUS"
+    echo " • IPv6 禁用: $IPV6_STATUS"
+else
+    echo " • 内核优化: 已跳过 (Alpine 系统)"
+fi
 
 # 检查已安装的服务
 echo ""
@@ -457,61 +462,92 @@ echo -e "${BLUE}已安装服务：${NC}"
 
 if command -v XrayR >/dev/null 2>&1 || [ -f /etc/XrayR/config.yml ]; then
     echo "  ✓ XrayR"
-    if systemctl is-active --quiet XrayR 2>/dev/null; then
-        echo "    状态: 运行中"
+    if [ "$OS_TYPE" = "alpine" ]; then
+        echo "    版本: Alpine 专用版"
+        if rc-service xrayr status >/dev/null 2>&1; then
+            echo "    状态: 运行中"
+        else
+            echo "    状态: 未运行"
+        fi
     else
-        echo "    状态: 未运行"
+        if systemctl is-active --quiet XrayR 2>/dev/null; then
+            echo "    状态: 运行中"
+        else
+            echo "    状态: 未运行"
+        fi
     fi
 fi
 
 if command -v gost >/dev/null 2>&1; then
     GOST_VER=$(gost -V 2>/dev/null | head -n 1 || echo "已安装")
     echo "  ✓ GOST ($GOST_VER)"
-    if systemctl is-active --quiet gost 2>/dev/null; then
-        echo "    状态: 运行中"
-    elif systemctl is-enabled --quiet gost 2>/dev/null; then
-        echo "    状态: 已启用（未运行）"
+    if [ "$OS_TYPE" != "alpine" ]; then
+        if systemctl is-active --quiet gost 2>/dev/null; then
+            echo "    状态: 运行中"
+        elif systemctl is-enabled --quiet gost 2>/dev/null; then
+            echo "    状态: 已启用（未运行）"
+        else
+            echo "    状态: 未启用"
+        fi
     else
-        echo "    状态: 未启用"
+        echo "    状态: 手动管理 (Alpine 系统)"
     fi
 fi
 
 # 配置文件位置
 echo ""
 echo -e "${BLUE}配置文件位置：${NC}"
-echo "  • XrayR 配置: /etc/XrayR/config.yml"
-echo "  • 审计规则: /etc/XrayR/rulelist"
-echo "  • GeoSite: /etc/XrayR/geosite.dat"
-echo "  • GeoIP: /etc/XrayR/geoip.dat"
+echo " • XrayR 配置: /etc/XrayR/config.yml"
+echo " • 审计规则: /etc/XrayR/rulelist"
+echo " • GeoSite: /etc/XrayR/geosite.dat"
+echo " • GeoIP: /etc/XrayR/geoip.dat"
 if [ -f /etc/gost/gost.yaml ]; then
-    echo "  • GOST 配置: /etc/gost/gost.yaml"
+    echo " • GOST 配置: /etc/gost/gost.yaml"
 fi
 
 # 常用命令提示
 echo ""
 echo -e "${BLUE}常用命令：${NC}"
-echo "  • XrayR 管理: XrayR 或 xrayr"
-echo "  • 启动服务: systemctl start XrayR"
-echo "  • 停止服务: systemctl stop XrayR"
-echo "  • 重启服务: systemctl restart XrayR"
-echo "  • 查看状态: systemctl status XrayR"
-echo "  • 查看日志: XrayR log 或 journalctl -u XrayR -f"
-echo "  • 编辑配置: vim /etc/XrayR/config.yml"
+
+if [ "$OS_TYPE" = "alpine" ]; then
+    echo " • XrayR 管理 (Alpine):"
+    echo "   - 启动服务: rc-service xrayr start"
+    echo "   - 停止服务: rc-service xrayr stop"
+    echo "   - 重启服务: rc-service xrayr restart"
+    echo "   - 查看状态: rc-service xrayr status"
+    echo "   - 查看日志: cat /var/log/xrayr/xrayr.log"
+    echo "   - 开机自启: rc-update add xrayr default"
+    echo " • 编辑配置: vi /etc/XrayR/config.yml"
+else
+    echo " • XrayR 管理: XrayR 或 xrayr"
+    echo " • 启动服务: systemctl start XrayR"
+    echo " • 停止服务: systemctl stop XrayR"
+    echo " • 重启服务: systemctl restart XrayR"
+    echo " • 查看状态: systemctl status XrayR"
+    echo " • 查看日志: XrayR log 或 journalctl -u XrayR -f"
+    echo " • 编辑配置: vim /etc/XrayR/config.yml"
+fi
 
 if command -v gost >/dev/null 2>&1; then
     echo ""
     echo -e "${BLUE}GOST 使用：${NC}"
-    echo "  • 查看版本: gost -V"
-    echo "  • 查看帮助: gost -h"
-    echo "  • 示例转发: gost -L=:8080 -F=proxy_server:port"
+    echo " • 查看版本: gost -V"
+    echo " • 查看帮助: gost -h"
+    echo " • 示例转发: gost -L=:8080 -F=proxy_server:port"
     echo ""
     echo -e "${BLUE}GOST 服务管理：${NC}"
-    echo "  • 启动服务: systemctl start gost"
-    echo "  • 停止服务: systemctl stop gost"
-    echo "  • 重启服务: systemctl restart gost"
-    echo "  • 查看状态: systemctl status gost"
-    echo "  • 查看日志: journalctl -u gost -f"
-    echo "  • 编辑配置: vim /etc/gost/gost.yaml"
+    if [ "$OS_TYPE" != "alpine" ]; then
+        echo " • 启动服务: systemctl start gost"
+        echo " • 停止服务: systemctl stop gost"
+        echo " • 重启服务: systemctl restart gost"
+        echo " • 查看状态: systemctl status gost"
+        echo " • 查看日志: journalctl -u gost -f"
+        echo " • 编辑配置: vim /etc/gost/gost.yaml"
+    else
+        echo " • Alpine 系统需手动管理 GOST"
+        echo " • 后台运行: gost -C /etc/gost/gost.yaml &"
+        echo " • 编辑配置: vi /etc/gost/gost.yaml"
+    fi
 fi
 
 echo ""
@@ -519,11 +555,27 @@ echo -e "${GREEN}===============================================================
 echo -e "${GREEN}脚本执行完成！请根据实际需求修改配置文件${NC}"
 echo -e "${GREEN}================================================================${NC}"
 echo ""
-echo -e "${YELLOW}提示:${NC}"
-echo -e "${YELLOW}  • XrayR 配置: vim /etc/XrayR/config.yml${NC}"
-if [ -f /etc/gost/gost.yaml ]; then
-    echo -e "${YELLOW}  • GOST 配置: vim /etc/gost/gost.yaml (配置后执行 systemctl restart gost)${NC}"
-fi
-echo ""
 
+echo -e "${YELLOW}提示:${NC}"
+if [ "$OS_TYPE" = "alpine" ]; then
+    echo -e "${YELLOW} • Alpine 系统已跳过内核优化步骤${NC}"
+    echo -e "${YELLOW} • Alpine 系统已安装 XrayR Alpine 专用版本${NC}"
+    echo -e "${YELLOW} • XrayR 配置: vi /etc/XrayR/config.yml${NC}"
+else
+    echo -e "${YELLOW} • XrayR 配置: vim /etc/XrayR/config.yml${NC}"
+fi
+
+if [ -f /etc/gost/gost.yaml ]; then
+    if [ "$OS_TYPE" = "alpine" ]; then
+        echo -e "${YELLOW} • GOST 配置: vi /etc/gost/gost.yaml${NC}"
+    else
+        echo -e "${YELLOW} • GOST 配置: vim /etc/gost/gost.yaml (配置后执行 systemctl restart gost)${NC}"
+    fi
+fi
+
+if [ "$OS_TYPE" != "alpine" ]; then
+    echo -e "${YELLOW} • 系统已启用 BBR 加速和网络优化${NC}"
+fi
+
+echo ""
 exit 0
