@@ -2,7 +2,7 @@
 
 #================================================================
 # XrayR 自动化安装配置脚本
-# 功能：安装 XrayR、GOST、配置审计规则、系统优化、网络加速
+# 功能：安装 XrayR、配置审计规则、系统优化、网络加速
 # 支持：Ubuntu/Debian/CentOS/Alpine
 #================================================================
 
@@ -225,34 +225,35 @@ else
 fi
 
 # ============================================
-# 步骤 3: 安装 GOST
+# 步骤 3: 安装 GOST (仅非 Alpine 系统)
 # ============================================
-log_step "3. 安装 GOST..."
-log_info "开始安装 GOST..."
+if [ "$OS_TYPE" != "alpine" ]; then
+    log_step "3. 安装 GOST..."
+    log_info "开始安装 GOST..."
 
-# 临时禁用 set -e 避免 GOST 安装脚本的退出码影响
-set +e
-bash <(curl -fsSL https://github.com/go-gost/gost/raw/master/install.sh)
-GOST_EXIT_CODE=$?
-set -e
+    # 临时禁用 set -e 避免 GOST 安装脚本的退出码影响
+    set +e
+    bash <(curl -fsSL https://github.com/go-gost/gost/raw/master/install.sh)
+    GOST_EXIT_CODE=$?
+    set -e
 
-if [ $GOST_EXIT_CODE -eq 0 ]; then
-    log_info "✓ GOST 安装完成"
+    if [ $GOST_EXIT_CODE -eq 0 ]; then
+        log_info "✓ GOST 安装完成"
 
-    # 检查 GOST 是否可用
-    if command -v gost >/dev/null 2>&1; then
-        GOST_VERSION=$(gost -V 2>/dev/null | head -n 1 || echo "未知版本")
-        log_info "GOST 版本: $GOST_VERSION"
-    fi
+        # 检查 GOST 是否可用
+        if command -v gost >/dev/null 2>&1; then
+            GOST_VERSION=$(gost -V 2>/dev/null \vert{} head -n 1 \vert{}\vert{} echo "未知版本")
+            log_info "GOST 版本: $GOST_VERSION"
+        fi
 
-    # 创建 GOST 配置目录
-    log_info "创建 GOST 配置目录..."
-    mkdir -p /etc/gost
+        # 创建 GOST 配置目录
+        log_info "创建 GOST 配置目录..."
+        mkdir -p /etc/gost
 
-    # 创建 GOST 示例配置文件
-    if [ ! -f /etc/gost/gost.yaml ]; then
-        log_info "创建 GOST 示例配置文件..."
-        cat > /etc/gost/gost.yaml << 'GOSTEOF'
+        # 创建 GOST 示例配置文件
+        if [ ! -f /etc/gost/gost.yaml ]; then
+            log_info "创建 GOST 示例配置文件..."
+            cat > /etc/gost/gost.yaml << 'GOSTEOF'
 # GOST 配置文件示例
 # 请根据实际需求修改此配置
 # 服务配置
@@ -264,12 +265,12 @@ services:
     listener:
       type: tcp
 GOSTEOF
-        log_info "已创建示例配置: /etc/gost/gost.yaml"
-    fi
+            log_info "已创建示例配置: /etc/gost/gost.yaml"
+        fi
 
-    # 创建 systemd 服务文件
-    log_info "创建 GOST systemd 服务..."
-    cat > /etc/systemd/system/gost.service << 'SERVICEEOF'
+        # 创建 systemd 服务文件
+        log_info "创建 GOST systemd 服务..."
+        cat > /etc/systemd/system/gost.service << 'SERVICEEOF'
 [Unit]
 Description=Gost Proxy Service
 After=network.target
@@ -289,14 +290,18 @@ RestartSec=5s
 WantedBy=multi-user.target
 SERVICEEOF
 
-    # 重载 systemd
-    log_info "配置 GOST 服务..."
-    systemctl daemon-reload
-    log_info "✓ GOST 服务文件已创建"
-    log_info "提示: 修改配置后使用 'systemctl start gost' 启动服务"
-    log_info "提示: 设置开机自启: 'systemctl enable gost'"
+        # 重载 systemd
+        log_info "配置 GOST 服务..."
+        systemctl daemon-reload
+        log_info "✓ GOST 服务文件已创建"
+        log_info "提示: 修改配置后使用 'systemctl start gost' 启动服务"
+        log_info "提示: 设置开机自启: 'systemctl enable gost'"
+    else
+        log_warn "GOST 安装可能失败（退出码: $GOST_EXIT_CODE），请手动检查"
+    fi
 else
-    log_warn "GOST 安装可能失败（退出码: $GOST_EXIT_CODE），请手动检查"
+    log_step "3. 跳过 GOST 安装 (Alpine 系统)"
+    log_info "Alpine 系统不安装 GOST"
 fi
 
 # ============================================
@@ -430,7 +435,7 @@ fi
 # 步骤 10: 清理临时文件
 # ============================================
 log_step "10. 清理临时文件..."
-rm -f install.sh FastBench.sh install-xrayr.sh alpine-xrayr-install.sh xrayr-install.sh
+rm -f install.sh FastBench.sh install-xrayr.sh alpine-xrayr-install.sh xrayr-install.sh fastbench.sh
 log_info "临时文件清理完成"
 
 # ============================================
@@ -478,19 +483,15 @@ if command -v XrayR >/dev/null 2>&1 || [ -f /etc/XrayR/config.yml ]; then
     fi
 fi
 
-if command -v gost >/dev/null 2>&1; then
+if [ "$OS_TYPE" != "alpine" ] && command -v gost >/dev/null 2>&1; then
     GOST_VER=$(gost -V 2>/dev/null | head -n 1 || echo "已安装")
     echo "  ✓ GOST ($GOST_VER)"
-    if [ "$OS_TYPE" != "alpine" ]; then
-        if systemctl is-active --quiet gost 2>/dev/null; then
-            echo "    状态: 运行中"
-        elif systemctl is-enabled --quiet gost 2>/dev/null; then
-            echo "    状态: 已启用（未运行）"
-        else
-            echo "    状态: 未启用"
-        fi
+    if systemctl is-active --quiet gost 2>/dev/null; then
+        echo "    状态: 运行中"
+    elif systemctl is-enabled --quiet gost 2>/dev/null; then
+        echo "    状态: 已启用（未运行）"
     else
-        echo "    状态: 手动管理 (Alpine 系统)"
+        echo "    状态: 未启用"
     fi
 fi
 
@@ -501,7 +502,7 @@ echo " • XrayR 配置: /etc/XrayR/config.yml"
 echo " • 审计规则: /etc/XrayR/rulelist"
 echo " • GeoSite: /etc/XrayR/geosite.dat"
 echo " • GeoIP: /etc/XrayR/geoip.dat"
-if [ -f /etc/gost/gost.yaml ]; then
+if [ "$OS_TYPE" != "alpine" ] && [ -f /etc/gost/gost.yaml ]; then
     echo " • GOST 配置: /etc/gost/gost.yaml"
 fi
 
@@ -528,7 +529,7 @@ else
     echo " • 编辑配置: vim /etc/XrayR/config.yml"
 fi
 
-if command -v gost >/dev/null 2>&1; then
+if [ "$OS_TYPE" != "alpine" ] && command -v gost >/dev/null 2>&1; then
     echo ""
     echo -e "${BLUE}GOST 使用：${NC}"
     echo " • 查看版本: gost -V"
@@ -536,18 +537,12 @@ if command -v gost >/dev/null 2>&1; then
     echo " • 示例转发: gost -L=:8080 -F=proxy_server:port"
     echo ""
     echo -e "${BLUE}GOST 服务管理：${NC}"
-    if [ "$OS_TYPE" != "alpine" ]; then
-        echo " • 启动服务: systemctl start gost"
-        echo " • 停止服务: systemctl stop gost"
-        echo " • 重启服务: systemctl restart gost"
-        echo " • 查看状态: systemctl status gost"
-        echo " • 查看日志: journalctl -u gost -f"
-        echo " • 编辑配置: vim /etc/gost/gost.yaml"
-    else
-        echo " • Alpine 系统需手动管理 GOST"
-        echo " • 后台运行: gost -C /etc/gost/gost.yaml &"
-        echo " • 编辑配置: vi /etc/gost/gost.yaml"
-    fi
+    echo " • 启动服务: systemctl start gost"
+    echo " • 停止服务: systemctl stop gost"
+    echo " • 重启服务: systemctl restart gost"
+    echo " • 查看状态: systemctl status gost"
+    echo " • 查看日志: journalctl -u gost -f"
+    echo " • 编辑配置: vim /etc/gost/gost.yaml"
 fi
 
 echo ""
@@ -560,20 +555,13 @@ echo -e "${YELLOW}提示:${NC}"
 if [ "$OS_TYPE" = "alpine" ]; then
     echo -e "${YELLOW} • Alpine 系统已跳过内核优化步骤${NC}"
     echo -e "${YELLOW} • Alpine 系统已安装 XrayR Alpine 专用版本${NC}"
+    echo -e "${YELLOW} • Alpine 系统未安装 GOST（不支持）${NC}"
     echo -e "${YELLOW} • XrayR 配置: vi /etc/XrayR/config.yml${NC}"
 else
     echo -e "${YELLOW} • XrayR 配置: vim /etc/XrayR/config.yml${NC}"
-fi
-
-if [ -f /etc/gost/gost.yaml ]; then
-    if [ "$OS_TYPE" = "alpine" ]; then
-        echo -e "${YELLOW} • GOST 配置: vi /etc/gost/gost.yaml${NC}"
-    else
+    if [ -f /etc/gost/gost.yaml ]; then
         echo -e "${YELLOW} • GOST 配置: vim /etc/gost/gost.yaml (配置后执行 systemctl restart gost)${NC}"
     fi
-fi
-
-if [ "$OS_TYPE" != "alpine" ]; then
     echo -e "${YELLOW} • 系统已启用 BBR 加速和网络优化${NC}"
 fi
 
