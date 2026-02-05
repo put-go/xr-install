@@ -5,6 +5,8 @@
 # 功能：安装 XrayR、GOST、配置审计规则、系统优化、网络加速
 #================================================================
 
+set -e  # 遇到错误立即退出
+
 echo "========================================="
 echo "  XrayR 自动化安装配置脚本"
 echo "========================================="
@@ -117,6 +119,10 @@ fi
 
 check_root
 
+# 检测系统类型（提前检测）
+OS_TYPE=$(detect_os)
+log_info "检测到系统类型: $OS_TYPE"
+
 # ============================================
 # 步骤 0: 系统初始化
 # ============================================
@@ -132,7 +138,6 @@ fi
 
 # 安装必要的依赖
 log_info "检查并安装必要的依赖..."
-OS_TYPE=$(detect_os)
 
 case $OS_TYPE in
     ubuntu|debian)
@@ -144,7 +149,7 @@ case $OS_TYPE in
         yum install -y curl wget bc vim net-tools >/dev/null 2>&1
         ;;
     alpine)
-        apk add --no-cache curl wget bc bash vim >/dev/null 2>&1
+        apk add --no-cache curl wget bc bash vim openrc >/dev/null 2>&1
         ;;
     *)
         log_warn "未知系统类型，尝试继续..."
@@ -154,20 +159,26 @@ log_info "依赖安装完成"
 
 # ============================================
 # 步骤 1: 系统内核优化 (BBR + 网络优化)
+# Alpine 系统跳过此步骤
 # ============================================
-log_step "1. 系统内核优化..."
+if [ "$OS_TYPE" = "alpine" ]; then
+    log_step "1. 跳过系统内核优化（Alpine 系统）"
+    log_info "Alpine 系统使用轻量级设计，无需内核优化"
+    log_info "默认配置已足够满足 XrayR 运行需求"
+else
+    log_step "1. 系统内核优化..."
 
-log_info "配置系统内核参数..."
-if true; then
+    log_info "配置系统内核参数..."
+    if true; then
 
-    # 备份原配置
-    if [ -f /etc/sysctl.conf ]; then
-        cp /etc/sysctl.conf /etc/sysctl.conf.bak.$(date +%Y%m%d%H%M%S)
-        log_info "已备份原配置到 /etc/sysctl.conf.bak.*"
-    fi
+        # 备份原配置
+        if [ -f /etc/sysctl.conf ]; then
+            cp /etc/sysctl.conf /etc/sysctl.conf.bak.$(date +%Y%m%d%H%M%S)
+            log_info "已备份原配置到 /etc/sysctl.conf.bak.*"
+        fi
 
-    # 写入优化配置
-    cat > /etc/sysctl.conf << 'EOF'
+        # 写入优化配置
+        cat > /etc/sysctl.conf << 'EOF'
 # ============================================
 # XrayR 系统优化配置
 # ============================================
@@ -230,24 +241,25 @@ net.ipv6.conf.default.disable_ipv6 = 1
 net.ipv6.conf.lo.disable_ipv6 = 1
 EOF
 
-    # 应用配置
-    log_info "应用内核参数..."
-    sysctl -p >/dev/null 2>&1
-    sysctl --system >/dev/null 2>&1
+        # 应用配置
+        log_info "应用内核参数..."
+        sysctl -p >/dev/null 2>&1
+        sysctl --system >/dev/null 2>&1
 
-    # 验证 BBR
-    if sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q bbr; then
-        log_info "✓ BBR 加速已启用"
-    else
-        log_warn "BBR 启用失败，可能需要更新内核"
+        # 验证 BBR
+        if sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q bbr; then
+            log_info "✓ BBR 加速已启用"
+        else
+            log_warn "BBR 启用失败，可能需要更新内核"
+        fi
+
+        # 验证 IPv6
+        if sysctl net.ipv6.conf.all.disable_ipv6 2>/dev/null | grep -q "= 1"; then
+            log_info "✓ IPv6 已禁用"
+        fi
+
+        log_info "系统内核优化完成"
     fi
-
-    # 验证 IPv6
-    if sysctl net.ipv6.conf.all.disable_ipv6 2>/dev/null | grep -q "= 1"; then
-        log_info "✓ IPv6 已禁用"
-    fi
-
-    log_info "系统内核优化完成"
 fi
 
 # ============================================
@@ -255,13 +267,40 @@ fi
 # ============================================
 log_step "2. 安装 XrayR..."
 
-if wget -N -O xrayr-install.sh https://raw.githubusercontent.com/put-go/XrayR-release/refs/heads/master/install.sh 2>/dev/null; then
-    bash xrayr-install.sh
-    rm -f xrayr-install.sh
-    log_info "XrayR 安装完成"
+if [ "$OS_TYPE" = "alpine" ]; then
+    # Alpine 系统使用专用安装脚本
+    log_info "使用 Alpine 专用 XrayR 安装脚本..."
+    if wget -N -O alpine-xrayr-install.sh https://raw.githubusercontent.com/put-go/alpineXrayR/refs/heads/main/XrayR_Alpine/install-xrayr.sh 2>/dev/null; then
+        chmod +x alpine-xrayr-install.sh
+        
+        # 临时禁用错误退出
+        set +e
+        bash alpine-xrayr-install.sh
+        XRAYR_EXIT_CODE=$?
+        set -e
+        
+        rm -f alpine-xrayr-install.sh
+        
+        if [ $XRAYR_EXIT_CODE -eq 0 ]; then
+            log_info "Alpine XrayR 安装完成"
+        else
+            log_warn "Alpine XrayR 安装可能存在问题（退出码: $XRAYR_EXIT_CODE）"
+        fi
+    else
+        log_error "Alpine XrayR 安装脚本下载失败"
+        exit 1
+    fi
 else
-    log_error "XrayR 安装脚本下载失败"
-    exit 1
+    # 非 Alpine 系统使用标准安装脚本
+    log_info "使用标准 XrayR 安装脚本..."
+    if wget -N -O xrayr-install.sh https://raw.githubusercontent.com/put-go/XrayR-release/refs/heads/master/install.sh 2>/dev/null; then
+        bash xrayr-install.sh
+        rm -f xrayr-install.sh
+        log_info "XrayR 安装完成"
+    else
+        log_error "XrayR 安装脚本下载失败"
+        exit 1
+    fi
 fi
 
 # ============================================
@@ -417,87 +456,96 @@ configure_vim
 
 # ============================================
 # 步骤 8: 性能测试（可选）
-# ============================================
-log_step "8. 性能测试..."
-
-# 检查服务器配置
-if check_server_specs; then
-    read -p "是否进行服务器性能测试？(y/n，默认n): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        log_info "开始性能测试..."
-
-        if wget -N -O fastbench.sh http://raw.githubusercontent.com/sshpc/FastBench/main/FastBench.sh 2>/dev/null; then
-            chmod +x fastbench.sh
-
-            # 临时禁用错误立即退出
-            set +e
-            bash fastbench.sh
-            BENCH_EXIT_CODE=$?
-            set -e
-
-            # 友好的退出码处理
-            case $BENCH_EXIT_CODE in
-                0)
-                    log_info "✓ 性能测试完成"
-                    ;;
-                1)
-                    log_info "✓ 性能测试完成（含警告）"
-                    ;;
-                *)
-                    log_warn "性能测试异常退出（退出码: $BENCH_EXIT_CODE），可继续"
-                    ;;
-            esac
-
-            rm -f fastbench.sh
-        else
-            log_warn "性能测试脚本下载失败，跳过此步骤"
-        fi
-    else
-        log_info "已跳过性能测试"
-    fi
-else
-    log_warn "检测到服务器配置低于 1C1G，自动跳过性能测试"
-    log_info "提示: 如需强制测试，可手动运行:"
-    log_info "  wget -O - http://raw.githubusercontent.com/sshpc/FastBench/main/FastBench.sh | bash"
-fi
-
-# ============================================
-# 步骤 9: Alpine 特殊处理
+# Alpine 系统跳过性能测试
 # ============================================
 if [ "$OS_TYPE" = "alpine" ]; then
-    log_step "9. Alpine 系统特殊配置..."
-    log_info "安装 Alpine XrayR..."
-    if wget -N -O alpine-xrayr-install.sh https://raw.githubusercontent.com/put-go/alpineXrayR/refs/heads/main/XrayR_Alpine/install-xrayr.sh 2>/dev/null; then
-        chmod +x alpine-xrayr-install.sh
-        bash alpine-xrayr-install.sh
-        rm -f alpine-xrayr-install.sh
-        log_info "Alpine XrayR 安装完成"
+    log_step "8. 跳过性能测试（Alpine 系统）"
+    log_info "Alpine 系统通常用于容器环境，跳过性能测试"
+    log_info "如需测试，可手动运行性能测试脚本"
+else
+    log_step "8. 性能测试..."
+
+    # 检查服务器配置
+    if check_server_specs; then
+        read -p "是否进行服务器性能测试？(y/n，默认n): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            log_info "开始性能测试..."
+
+            if wget -N -O fastbench.sh http://raw.githubusercontent.com/sshpc/FastBench/main/FastBench.sh 2>/dev/null; then
+                chmod +x fastbench.sh
+
+                # 临时禁用错误立即退出
+                set +e
+                bash fastbench.sh
+                BENCH_EXIT_CODE=$?
+                set -e
+
+                # 友好的退出码处理
+                case $BENCH_EXIT_CODE in
+                    0)
+                        log_info "✓ 性能测试完成"
+                        ;;
+                    1)
+                        log_info "✓ 性能测试完成（含警告）"
+                        ;;
+                    *)
+                        log_warn "性能测试异常退出（退出码: $BENCH_EXIT_CODE），可继续"
+                        ;;
+                esac
+
+                rm -f fastbench.sh
+            else
+                log_warn "性能测试脚本下载失败，跳过此步骤"
+            fi
+        else
+            log_info "已跳过性能测试"
+        fi
     else
-        log_warn "Alpine XrayR 安装脚本下载失败"
+        log_warn "检测到服务器配置低于 1C1G，自动跳过性能测试"
+        log_info "提示: 如需强制测试，可手动运行:"
+        log_info "  wget -O - http://raw.githubusercontent.com/sshpc/FastBench/main/FastBench.sh | bash"
     fi
 fi
 
 # ============================================
-# 步骤 10: 设置命令快捷方式
+# 步骤 9: 设置命令快捷方式
+# Alpine 系统使用 OpenRC 直接管理，无需管理脚本
 # ============================================
-log_step "10. 设置命令快捷方式..."
+log_step "9. 配置服务管理方式..."
 
-log_info "设置命令快捷方式..."
-if curl -o /usr/bin/XrayR -Ls https://raw.githubusercontent.com/XrayR-project/XrayR-release/master/XrayR.sh 2>/dev/null; then
-    chmod +x /usr/bin/XrayR
-    ln -sf /usr/bin/XrayR /usr/bin/xrayr
-    log_info "命令快捷方式设置完成"
-    log_info "现在可以使用 'XrayR' 或 'xrayr' 命令管理服务"
+if [ "$OS_TYPE" = "alpine" ]; then
+    log_info "Alpine 系统使用 OpenRC 服务管理"
+    log_info "XrayR 服务已通过 /etc/init.d/XrayR 配置"
+    log_info "使用以下命令管理服务："
+    log_info "  • 启动: rc-service XrayR start"
+    log_info "  • 停止: rc-service XrayR stop"
+    log_info "  • 重启: rc-service XrayR restart"
+    log_info "  • 状态: rc-service XrayR status"
+    
+    # 检查是否已添加到开机启动
+    if rc-update show 2>/dev/null | grep -q XrayR; then
+        log_info "✓ XrayR 已设置开机自启"
+    else
+        log_warn "XrayR 未设置开机自启，运行: rc-update add XrayR"
+    fi
 else
-    log_warn "快捷方式脚本下载失败"
+    log_info "配置标准 XrayR 管理命令..."
+    if curl -fSL https://raw.githubusercontent.com/XrayR-project/XrayR-release/master/XrayR.sh -o /usr/bin/XrayR 2>/dev/null; then
+        chmod +x /usr/bin/XrayR
+        ln -sf /usr/bin/XrayR /usr/bin/xrayr
+        log_info "✓ 命令快捷方式设置完成"
+        log_info "现在可以使用 'XrayR' 或 'xrayr' 命令管理服务"
+    else
+        log_warn "管理脚本下载失败，请使用 systemctl 管理"
+    fi
 fi
 
 # ============================================
-# 步骤 11: 清理临时文件
+# 步骤 10: 清理临时文件
 # ============================================
-log_step "11. 清理临时文件..."
-rm -f install.sh FastBench.sh install-xrayr.sh
+log_step "10. 清理临时文件..."
+rm -f install.sh FastBench.sh xrayr-install.sh alpine-xrayr-install.sh
 log_info "临时文件清理完成"
 
 # ============================================
@@ -512,22 +560,48 @@ echo -e "${BLUE}系统信息：${NC}"
 echo "  • 操作系统: $OS_TYPE"
 echo "  • 主机名: $HOSTNAME"
 
-# 获取 BBR 和 IPv6 状态
-BBR_STATUS=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}' || echo "未知")
-IPV6_STATUS=$(sysctl net.ipv6.conf.all.disable_ipv6 2>/dev/null | awk '{print $3}' || echo "未知")
-echo "  • BBR 状态: $BBR_STATUS"
-echo "  • IPv6 禁用: $IPV6_STATUS"
+# 仅非 Alpine 系统显示 BBR 和 IPv6 状态
+if [ "$OS_TYPE" != "alpine" ]; then
+    BBR_STATUS=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}' || echo "未知")
+    IPV6_STATUS=$(sysctl net.ipv6.conf.all.disable_ipv6 2>/dev/null | awk '{print $3}' || echo "未知")
+    echo "  • BBR 状态: $BBR_STATUS"
+    echo "  • IPv6 禁用: $IPV6_STATUS"
+else
+    echo "  • 系统优化: 跳过（Alpine 轻量级系统）"
+fi
 
 # 检查已安装的服务
 echo ""
 echo -e "${BLUE}已安装服务：${NC}"
 
-if command -v XrayR >/dev/null 2>&1 || [ -f /etc/XrayR/config.yml ]; then
+if [ -f /etc/XrayR/config.yml ]; then
     echo "  ✓ XrayR"
-    if systemctl is-active --quiet XrayR 2>/dev/null; then
-        echo "    状态: 运行中"
+    
+    # 根据系统类型检查服务状态
+    if [ "$OS_TYPE" = "alpine" ]; then
+        if [ -f /etc/init.d/XrayR ]; then
+            echo "    • 服务文件: /etc/init.d/XrayR"
+            
+            # 检查服务状态
+            if rc-service XrayR status 2>/dev/null | grep -q "started"; then
+                echo "    • 运行状态: 运行中"
+            else
+                echo "    • 运行状态: 未运行"
+            fi
+            
+            # 检查开机自启
+            if rc-update show 2>/dev/null | grep -q XrayR; then
+                echo "    • 开机自启: 已启用"
+            else
+                echo "    • 开机自启: 未启用"
+            fi
+        fi
     else
-        echo "    状态: 未运行"
+        if systemctl is-active --quiet XrayR 2>/dev/null; then
+            echo "    • 运行状态: 运行中"
+        else
+            echo "    • 运行状态: 未运行"
+        fi
     fi
 fi
 
@@ -535,11 +609,11 @@ if command -v gost >/dev/null 2>&1; then
     GOST_VER=$(gost -V 2>/dev/null | head -n 1 || echo "已安装")
     echo "  ✓ GOST ($GOST_VER)"
     if systemctl is-active --quiet gost 2>/dev/null; then
-        echo "    状态: 运行中"
+        echo "    • 运行状态: 运行中"
     elif systemctl is-enabled --quiet gost 2>/dev/null; then
-        echo "    状态: 已启用（未运行）"
+        echo "    • 运行状态: 已启用（未运行）"
     else
-        echo "    状态: 未启用（需手动配置并启动）"
+        echo "    • 运行状态: 未启用（需手动配置并启动）"
     fi
 elif [ "$OS_TYPE" = "alpine" ]; then
     echo "  ⊗ GOST (Alpine 系统不支持)"
@@ -559,50 +633,115 @@ echo "  • Vim 配置: ~/.vimrc"
 
 # 常用命令提示
 echo ""
-echo -e "${BLUE}常用命令：${NC}"
-echo "  • XrayR 管理: XrayR 或 xrayr"
-echo "  • 启动服务: systemctl start XrayR"
-echo "  • 停止服务: systemctl stop XrayR"
-echo "  • 重启服务: systemctl restart XrayR"
-echo "  • 查看状态: systemctl status XrayR"
-echo "  • 查看日志: XrayR log 或 journalctl -u XrayR -f"
+echo -e "${BLUE}服务管理命令：${NC}"
+
+if [ "$OS_TYPE" = "alpine" ]; then
+    echo "  ${YELLOW}Alpine 使用 OpenRC 管理：${NC}"
+    echo "  • 启动服务: rc-service XrayR start"
+    echo "  • 停止服务: rc-service XrayR stop"
+    echo "  • 重启服务: rc-service XrayR restart"
+    echo "  • 查看状态: rc-service XrayR status"
+    echo "  • 开机自启: rc-update add XrayR default"
+    echo "  • 取消自启: rc-update del XrayR default"
+    echo ""
+    echo "  ${YELLOW}查看服务：${NC}"
+    echo "  • 列出所有服务: rc-status"
+    echo "  • 查看启动项: rc-update show"
+else
+    if command -v XrayR >/dev/null 2>&1 && [ -x /usr/bin/XrayR ]; then
+        echo "  ${YELLOW}使用管理脚本：${NC}"
+        echo "  • 管理菜单: XrayR"
+        echo "  • 启动服务: XrayR start"
+        echo "  • 停止服务: XrayR stop"
+        echo "  • 重启服务: XrayR restart"
+        echo "  • 查看状态: XrayR status"
+        echo "  • 查看日志: XrayR log"
+        echo ""
+    fi
+    echo "  ${YELLOW}使用 systemctl：${NC}"
+    echo "  • 启动服务: systemctl start XrayR"
+    echo "  • 停止服务: systemctl stop XrayR"
+    echo "  • 重启服务: systemctl restart XrayR"
+    echo "  • 查看状态: systemctl status XrayR"
+    echo "  • 开机自启: systemctl enable XrayR"
+    echo "  • 取消自启: systemctl disable XrayR"
+fi
+
+echo ""
+echo -e "${BLUE}配置编辑：${NC}"
 echo "  • 编辑配置: vim /etc/XrayR/config.yml"
+echo "  • 编辑规则: vim /etc/XrayR/rulelist"
 
 if command -v gost >/dev/null 2>&1; then
     echo ""
-    echo -e "${BLUE}GOST 使用：${NC}"
+    echo -e "${BLUE}GOST 工具：${NC}"
     echo "  • 查看版本: gost -V"
     echo "  • 查看帮助: gost -h"
-    echo "  • 示例转发: gost -L=:8080 -F=proxy_server:port"
+    echo "  • 编辑配置: vim /etc/gost/gost.yaml"
     echo ""
     echo -e "${BLUE}GOST 服务管理：${NC}"
-    echo "  • 编辑配置: vim /etc/gost/gost.yaml"
     echo "  • 启动服务: systemctl start gost"
     echo "  • 停止服务: systemctl stop gost"
     echo "  • 重启服务: systemctl restart gost"
     echo "  • 查看状态: systemctl status gost"
-    echo "  • 查看日志: journalctl -u gost -f"
     echo "  • 开机自启: systemctl enable gost"
 fi
 
 echo ""
 echo -e "${BLUE}脚本特殊参数：${NC}"
-echo "  • 单独配置 Vim: bash $0 --vim (或 -v)"
-echo "  • 查看帮助: bash $0 --help (或 -h)"
-
+echo "  • 单独配置 Vim: bash <(wget -qO- https://raw.githubusercontent.com/put-go/xr-install/refs/heads/master/install.sh) --vim"
+echo "  • 查看帮助: bash <(wget -qO- https://raw.githubusercontent.com/put-go/xr-install/refs/heads/master/install.sh) --help"
 echo ""
+
 echo -e "${GREEN}================================================================${NC}"
 echo -e "${GREEN}脚本执行完成！请根据实际需求修改配置文件${NC}"
 echo -e "${GREEN}================================================================${NC}"
 echo ""
-echo -e "${YELLOW}提示:${NC}"
-echo -e "${YELLOW}  • XrayR 配置: vim /etc/XrayR/config.yml${NC}"
-if [ -f /etc/gost/gost.yaml ] && [ "$OS_TYPE" != "alpine" ]; then
-    echo -e "${YELLOW}  • GOST 配置: vim /etc/gost/gost.yaml${NC}"
-    echo -e "${YELLOW}  • GOST 启动: systemctl start gost (配置完成后)${NC}"
-    echo -e "${YELLOW}  • GOST 自启: systemctl enable gost (如需开机启动)${NC}"
+
+echo -e "${YELLOW}下一步操作提示:${NC}"
+echo -e "${YELLOW}  1. 编辑 XrayR 配置: vim /etc/XrayR/config.yml${NC}"
+echo -e "${YELLOW}  2. 配置对接面板信息（ApiHost、ApiKey、NodeID 等）${NC}"
+
+if [ "$OS_TYPE" = "alpine" ]; then
+    echo -e "${YELLOW}  3. 启动 XrayR: rc-service XrayR start${NC}"
+    echo -e "${YELLOW}  4. 检查状态: rc-service XrayR status${NC}"
+    echo -e "${YELLOW}  5. 设置自启: rc-update add XrayR default${NC}"
+else
+    echo -e "${YELLOW}  3. 启动 XrayR: systemctl start XrayR 或 XrayR start${NC}"
+    echo -e "${YELLOW}  4. 检查状态: systemctl status XrayR 或 XrayR status${NC}"
+    echo -e "${YELLOW}  5. 设置自启: systemctl enable XrayR${NC}"
 fi
-echo -e "${YELLOW}  • Vim 重配置: bash $0 --vim${NC}"
+
+if [ -f /etc/gost/gost.yaml ]; then
+    echo -e "${YELLOW}  6. GOST 配置: vim /etc/gost/gost.yaml${NC}"
+    echo -e "${YELLOW}  7. GOST 启动: systemctl enable --now gost${NC}"
+fi
+
 echo ""
 
+# Alpine 系统特别提示
+if [ "$OS_TYPE" = "alpine" ]; then
+    echo ""
+    echo -e "${BLUE}==========================================${NC}"
+    echo -e "${BLUE}Alpine 系统特别说明：${NC}"
+    echo -e "${BLUE}==========================================${NC}"
+    echo -e "${YELLOW}  • Alpine 使用轻量级设计，已跳过内核优化${NC}"
+    echo -e "${YELLOW}  • Alpine 不支持 GOST，已自动跳过${NC}"
+    echo -e "${YELLOW}  • Alpine 使用 OpenRC 管理服务（非 systemd）${NC}"
+    echo -e "${YELLOW}  • OpenRC 服务文件: /etc/init.d/XrayR${NC}"
+    echo -e "${YELLOW}  • 默认配置已足够满足 XrayR 运行需求${NC}"
+    echo ""
+    echo -e "${BLUE}OpenRC 常用命令：${NC}"
+    echo -e "  • 查看所有服务: ${GREEN}rc-status${NC}"
+    echo -e "  • 查看启动项: ${GREEN}rc-update show${NC}"
+    echo -e "  • 启动服务: ${GREEN}rc-service XrayR start${NC}"
+    echo -e "  • 停止服务: ${GREEN}rc-service XrayR stop${NC}"
+    echo -e "  • 重启服务: ${GREEN}rc-service XrayR restart${NC}"
+    echo -e "  • 查看状态: ${GREEN}rc-service XrayR status${NC}"
+    echo -e "  • 添加自启: ${GREEN}rc-update add XrayR default${NC}"
+    echo -e "  • 移除自启: ${GREEN}rc-update del XrayR default${NC}"
+    echo ""
+fi
+
 exit 0
+
