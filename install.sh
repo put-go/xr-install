@@ -521,10 +521,57 @@ else
 fi
 
 # ============================================
-# 步骤 9: 设置命令快捷方式
+# 步骤 9: 安装 Nezha 监控探针（可选）
+# ============================================
+log_step "9. 安装监控探针..."
+
+read -p "是否安装 Nezha 监控探针？(y/n，默认n): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    log_info "开始安装 Nezha 监控探针..."
+
+    # 提示用户输入服务器信息
+    echo ""
+    echo -e "${YELLOW}请输入 Nezha 服务器信息（直接回车使用默认值）：${NC}"
+    read -p "服务器地址 [默认: nz.supergene.top:443]: " NZ_SERVER_INPUT
+    read -p "客户端密钥 [默认: BVvcAVXU5mBNgmYt3uyckSTAX3HxoiEJ]: " NZ_SECRET_INPUT
+
+    # 使用用户输入或默认值
+    NZ_SERVER=${NZ_SERVER_INPUT:-"nz.supergene.top:443"}
+    NZ_CLIENT_SECRET=${NZ_SECRET_INPUT:-"BVvcAVXU5mBNgmYt3uyckSTAX3HxoiEJ"}
+
+    log_info "服务器: $NZ_SERVER"
+    log_info "正在下载安装脚本..."
+
+    if curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/nezhahq/scripts/main/agent/install.sh -o agent.sh 2>/dev/null; then
+        chmod +x agent.sh
+
+        # 临时禁用错误立即退出
+        set +e
+        env NZ_SERVER="$NZ_SERVER" NZ_TLS=true NZ_CLIENT_SECRET="$NZ_CLIENT_SECRET" ./agent.sh
+        AGENT_EXIT_CODE=$?
+        set -e
+
+        # 清理安装脚本
+        rm -f agent.sh
+
+        if [ $AGENT_EXIT_CODE -eq 0 ]; then
+            log_info "✓ Nezha 监控探针安装完成"
+        else
+            log_warn "Nezha 监控探针安装可能存在问题（退出码: $AGENT_EXIT_CODE）"
+        fi
+    else
+        log_error "Nezha 监控探针安装脚本下载失败"
+    fi
+else
+    log_info "已跳过监控探针安装"
+fi
+
+# ============================================
+# 步骤 10: 设置命令快捷方式
 # Alpine 系统使用 OpenRC 直接管理，无需管理脚本
 # ============================================
-log_step "9. 配置服务管理方式..."
+log_step "10. 配置服务管理方式..."
 
 if [ "$OS_TYPE" = "alpine" ]; then
     log_info "Alpine 系统使用 OpenRC 服务管理"
@@ -554,9 +601,9 @@ else
 fi
 
 # ============================================
-# 步骤 10: 清理临时文件
+# 步骤 11: 清理临时文件
 # ============================================
-log_step "10. 清理临时文件..."
+log_step "11. 清理临时文件..."
 rm -f install.sh FastBench.sh xrayr-install.sh alpine-xrayr-install.sh
 log_info "临时文件清理完成"
 
