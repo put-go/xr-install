@@ -123,6 +123,13 @@ check_root
 OS_TYPE=$(detect_os)
 log_info "检测到系统类型: $OS_TYPE"
 
+# 检测虚拟化类型
+VIRT_TYPE="none"
+if command -v systemd-detect-virt >/dev/null 2>&1; then
+    VIRT_TYPE=$(systemd-detect-virt 2>/dev/null || echo "none")
+    log_info "检测到虚拟化类型: $VIRT_TYPE"
+fi
+
 # ============================================
 # 步骤 0: 系统初始化
 # ============================================
@@ -159,11 +166,16 @@ log_info "依赖安装完成"
 
 # ============================================
 # 步骤 1: 系统内核优化 (BBR + 网络优化)
-# Alpine 系统跳过此步骤
+# Alpine 系统和 LXC 容器跳过此步骤
 # ============================================
-if [ "$OS_TYPE" = "alpine" ]; then
-    log_step "1. 跳过系统内核优化（Alpine 系统）"
-    log_info "Alpine 系统使用轻量级设计，无需内核优化"
+if [ "$OS_TYPE" = "alpine" ] || [ "$VIRT_TYPE" = "lxc" ]; then
+    log_step "1. 跳过系统内核优化"
+    if [ "$OS_TYPE" = "alpine" ]; then
+        log_info "Alpine 系统使用轻量级设计，无需内核优化"
+    fi
+    if [ "$VIRT_TYPE" = "lxc" ]; then
+        log_info "LXC 容器环境，内核参数由宿主机管理"
+    fi
     log_info "默认配置已足够满足 XrayR 运行需求"
 else
     log_step "1. 系统内核优化..."
@@ -559,15 +571,22 @@ echo ""
 echo -e "${BLUE}系统信息：${NC}"
 echo "  • 操作系统: $OS_TYPE"
 echo "  • 主机名: $HOSTNAME"
+if [ "$VIRT_TYPE" != "none" ]; then
+    echo "  • 虚拟化: $VIRT_TYPE"
+fi
 
-# 仅非 Alpine 系统显示 BBR 和 IPv6 状态
-if [ "$OS_TYPE" != "alpine" ]; then
+# 仅非 Alpine 系统且非 LXC 容器显示 BBR 和 IPv6 状态
+if [ "$OS_TYPE" != "alpine" ] && [ "$VIRT_TYPE" != "lxc" ]; then
     BBR_STATUS=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}' || echo "未知")
     IPV6_STATUS=$(sysctl net.ipv6.conf.all.disable_ipv6 2>/dev/null | awk '{print $3}' || echo "未知")
     echo "  • BBR 状态: $BBR_STATUS"
     echo "  • IPv6 禁用: $IPV6_STATUS"
 else
-    echo "  • 系统优化: 跳过（Alpine 轻量级系统）"
+    if [ "$OS_TYPE" = "alpine" ]; then
+        echo "  • 系统优化: 跳过（Alpine 轻量级系统）"
+    elif [ "$VIRT_TYPE" = "lxc" ]; then
+        echo "  • 系统优化: 跳过（LXC 容器环境）"
+    fi
 fi
 
 # 检查已安装的服务
