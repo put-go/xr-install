@@ -320,7 +320,10 @@ fi
 # ============================================
 if [ "$OS_TYPE" != "alpine" ]; then
     log_step "3. 安装 GOST..."
-    
+
+    read -p "是否安装 GOST？(y/n，默认n): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
     log_info "开始安装 GOST..."
     if true; then
 
@@ -396,6 +399,9 @@ SERVICEEOF
         else
             log_warn "GOST 安装可能失败（退出码: $GOST_EXIT_CODE），请手动检查"
         fi
+    fi
+    else
+        log_info "已跳过 GOST 安装"
     fi
 else
     log_step "3. 跳过 GOST 安装（Alpine 系统不支持）"
