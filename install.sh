@@ -35,6 +35,167 @@ log_step() {
     echo -e "${BLUE}[STEP]${NC} $1"
 }
 
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+file_contains() {
+    local file="$1"
+    local text="$2"
+    [ -f "$file" ] && grep -Fqx "$text" "$file" 2>/dev/null
+}
+
+install_packages_if_missing() {
+    local missing=()
+    local item
+    local pkg
+    local cmd
+
+    for item in "$@"; do
+        pkg="${item%%:*}"
+        cmd="${item#*:}"
+        [ "$pkg" = "$cmd" ] && cmd="$pkg"
+
+        if ! command_exists "$cmd"; then
+            missing+=("$pkg")
+        fi
+    done
+
+    if [ ${#missing[@]} -eq 0 ]; then
+        log_info "依赖已存在，跳过安装"
+        return 0
+    fi
+
+    log_info "安装缺失依赖: ${missing[*]}"
+    case $OS_TYPE in
+        ubuntu|debian)
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y "${missing[@]}" >/dev/null 2>&1
+            ;;
+        centos|rhel|fedora)
+            yum install -y "${missing[@]}" >/dev/null 2>&1
+            ;;
+        alpine)
+            apk add --no-cache "${missing[@]}" >/dev/null 2>&1
+            ;;
+        *)
+            log_warn "未知系统类型，无法自动安装依赖: ${missing[*]}"
+            return 1
+            ;;
+    esac
+}
+
+ensure_file_content() {
+    local file="$1"
+    local content="$2"
+
+    mkdir -p "$(dirname "$file")"
+
+    if [ -f "$file" ] && [ "$(cat "$file")" = "$content" ]; then
+        return 1
+    fi
+
+    if [ -f "$file" ]; then
+        cp "$file" "${file}.bak.$(date +%Y%m%d%H%M%S)"
+    fi
+
+    printf "%s" "$content" > "$file"
+    return 0
+}
+
+download_if_missing() {
+    local target="$1"
+    shift
+    local urls=("$@")
+    local url
+
+    if [ -s "$target" ]; then
+        log_info "$(basename "$target") 已存在，跳过下载"
+        return 0
+    fi
+
+    for url in "${urls[@]}"; do
+        if curl -fsSL "$url" -o "$target" 2>/dev/null; then
+            log_info "$(basename "$target") 下载完成"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+configure_chrony_for_kvm() {
+    if [ "$VIRT_TYPE" != "kvm" ]; then
+        return 0
+    fi
+
+    log_step "KVM 环境配置 chrony 时间同步..."
+
+    case $OS_TYPE in
+        ubuntu|debian)
+            install_packages_if_missing chrony:chronyd || true
+            CHRONY_CONF="/etc/chrony/chrony.conf"
+            CHRONY_SERVICE="chrony"
+            ;;
+        centos|rhel|fedora)
+            install_packages_if_missing chrony:chronyd || true
+            CHRONY_CONF="/etc/chrony.conf"
+            CHRONY_SERVICE="chronyd"
+            ;;
+        alpine)
+            install_packages_if_missing chrony:chronyd || true
+            CHRONY_CONF="/etc/chrony/chrony.conf"
+            CHRONY_SERVICE="chronyd"
+            ;;
+        *)
+            log_warn "当前系统暂未适配 chrony 自动配置，跳过时间同步设置"
+            return 0
+            ;;
+    esac
+
+    CHRONY_CONTENT=$(cat << 'EOF'
+server ntp.aliyun.com iburst
+server ntp.tencent.com iburst
+server time.cloudflare.com iburst
+
+driftfile /var/lib/chrony/drift
+makestep 1.0 3
+rtcsync
+
+logdir /var/log/chrony
+EOF
+)
+
+    if ensure_file_content "$CHRONY_CONF" "$CHRONY_CONTENT"; then
+        log_info "chrony 配置已更新"
+    else
+        log_info "chrony 配置无变化，跳过重写"
+    fi
+
+    if [ "$OS_TYPE" = "alpine" ]; then
+        if ! rc-update show 2>/dev/null | grep -q "^ *chronyd"; then
+            rc-update add chronyd default >/dev/null 2>&1 || true
+        fi
+        if ! rc-service chronyd status 2>/dev/null | grep -q "started"; then
+            rc-service chronyd start >/dev/null 2>&1 || true
+        fi
+    else
+        if ! systemctl is-enabled --quiet "$CHRONY_SERVICE" 2>/dev/null; then
+            systemctl enable "$CHRONY_SERVICE" >/dev/null 2>&1 || true
+        fi
+        if ! systemctl is-active --quiet "$CHRONY_SERVICE" 2>/dev/null; then
+            systemctl start "$CHRONY_SERVICE" >/dev/null 2>&1 || systemctl restart "$CHRONY_SERVICE" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    if command -v chronyc >/dev/null 2>&1; then
+        chronyc -a makestep >/dev/null 2>&1 || true
+    fi
+
+    log_info "KVM 环境 chrony 时间同步配置完成"
+}
+
 # 检测系统类型
 detect_os() {
     if [ -f /etc/os-release ]; then
@@ -148,21 +309,21 @@ log_info "检查并安装必要的依赖..."
 
 case $OS_TYPE in
     ubuntu|debian)
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update -qq
-        apt-get install -y curl wget bc vim net-tools >/dev/null 2>&1
+        install_packages_if_missing curl wget bc vim net-tools:netstat
         ;;
     centos|rhel|fedora)
-        yum install -y curl wget bc vim net-tools >/dev/null 2>&1
+        install_packages_if_missing curl wget bc vim net-tools:netstat
         ;;
     alpine)
-        apk add --no-cache curl wget bc bash vim openrc >/dev/null 2>&1
+        install_packages_if_missing curl wget bc bash vim openrc:rc-service
         ;;
     *)
         log_warn "未知系统类型，尝试继续..."
         ;;
 esac
 log_info "依赖安装完成"
+
+configure_chrony_for_kvm
 
 # ============================================
 # 步骤 1: 系统内核优化 (BBR + 网络优化)
@@ -183,14 +344,7 @@ else
     log_info "配置系统内核参数..."
     if true; then
 
-        # 备份原配置
-        if [ -f /etc/sysctl.conf ]; then
-            cp /etc/sysctl.conf /etc/sysctl.conf.bak.$(date +%Y%m%d%H%M%S)
-            log_info "已备份原配置到 /etc/sysctl.conf.bak.*"
-        fi
-
-        # 写入优化配置
-        cat > /etc/sysctl.conf << 'EOF'
+        SYSCTL_CONTENT=$(cat << 'EOF'
 # ============================================
 # XrayR 系统优化配置
 # ============================================
@@ -252,11 +406,15 @@ net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.default.disable_ipv6 = 1
 net.ipv6.conf.lo.disable_ipv6 = 1
 EOF
+)
 
-        # 应用配置
-        log_info "应用内核参数..."
-        sysctl -p >/dev/null 2>&1
-        sysctl --system >/dev/null 2>&1
+        if ensure_file_content "/etc/sysctl.conf" "$SYSCTL_CONTENT"; then
+            log_info "系统参数已更新，应用内核参数..."
+            sysctl -p >/dev/null 2>&1
+            sysctl --system >/dev/null 2>&1
+        else
+            log_info "系统参数无变化，跳过重复写入"
+        fi
 
         # 验证 BBR
         if sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q bbr; then
@@ -281,8 +439,11 @@ log_step "2. 安装 XrayR..."
 
 if [ "$OS_TYPE" = "alpine" ]; then
     # Alpine 系统使用专用安装脚本
-    log_info "使用 Alpine 专用 XrayR 安装脚本..."
-    if wget -N -O alpine-xrayr-install.sh https://raw.githubusercontent.com/put-go/alpineXrayR/refs/heads/main/XrayR_Alpine/install-xrayr.sh 2>/dev/null; then
+    if [ -f /etc/XrayR/config.yml ] || [ -f /etc/init.d/XrayR ]; then
+        log_info "检测到 XrayR 已安装，跳过重复安装"
+    else
+        log_info "使用 Alpine 专用 XrayR 安装脚本..."
+        if wget -O alpine-xrayr-install.sh https://raw.githubusercontent.com/put-go/alpineXrayR/refs/heads/main/XrayR_Alpine/install-xrayr.sh 2>/dev/null; then
         chmod +x alpine-xrayr-install.sh
         
         # 临时禁用错误退出
@@ -293,25 +454,30 @@ if [ "$OS_TYPE" = "alpine" ]; then
         
         rm -f alpine-xrayr-install.sh
         
-        if [ $XRAYR_EXIT_CODE -eq 0 ]; then
-            log_info "Alpine XrayR 安装完成"
+            if [ $XRAYR_EXIT_CODE -eq 0 ]; then
+                log_info "Alpine XrayR 安装完成"
+            else
+                log_warn "Alpine XrayR 安装可能存在问题（退出码: $XRAYR_EXIT_CODE）"
+            fi
         else
-            log_warn "Alpine XrayR 安装可能存在问题（退出码: $XRAYR_EXIT_CODE）"
+            log_error "Alpine XrayR 安装脚本下载失败"
+            exit 1
         fi
-    else
-        log_error "Alpine XrayR 安装脚本下载失败"
-        exit 1
     fi
 else
     # 非 Alpine 系统使用标准安装脚本
-    log_info "使用标准 XrayR 安装脚本..."
-    if wget -N -O xrayr-install.sh https://raw.githubusercontent.com/put-go/XrayR-release/refs/heads/master/install.sh 2>/dev/null; then
-        bash xrayr-install.sh
-        rm -f xrayr-install.sh
-        log_info "XrayR 安装完成"
+    if [ -f /etc/XrayR/config.yml ] || systemctl list-unit-files 2>/dev/null | grep -q "^XrayR.service"; then
+        log_info "检测到 XrayR 已安装，跳过重复安装"
     else
-        log_error "XrayR 安装脚本下载失败"
-        exit 1
+        log_info "使用标准 XrayR 安装脚本..."
+        if wget -O xrayr-install.sh https://raw.githubusercontent.com/put-go/XrayR-release/refs/heads/master/install.sh 2>/dev/null; then
+            bash xrayr-install.sh
+            rm -f xrayr-install.sh
+            log_info "XrayR 安装完成"
+        else
+            log_error "XrayR 安装脚本下载失败"
+            exit 1
+        fi
     fi
 fi
 
@@ -324,29 +490,31 @@ if [ "$OS_TYPE" != "alpine" ]; then
     read -p "是否安装 GOST？(y/n，默认n): " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-    log_info "开始安装 GOST..."
-    if true; then
+        if command -v gost >/dev/null 2>&1; then
+            log_info "检测到 GOST 已安装，跳过重复安装"
+        else
+            log_info "开始安装 GOST..."
 
-        # 临时禁用 set -e 避免 GOST 安装脚本的退出码影响
-        set +e
-        bash <(curl -fsSL https://github.com/go-gost/gost/raw/master/install.sh)
-        GOST_EXIT_CODE=$?
-        set -e
+            # 临时禁用 set -e 避免 GOST 安装脚本的退出码影响
+            set +e
+            bash <(curl -fsSL https://github.com/go-gost/gost/raw/master/install.sh)
+            GOST_EXIT_CODE=$?
+            set -e
 
-        if [ $GOST_EXIT_CODE -eq 0 ]; then
-            log_info "✓ GOST 安装完成"
-
-            # 检查 GOST 是否可用
-            if command -v gost >/dev/null 2>&1; then
-                GOST_VERSION=$(gost -V 2>/dev/null | head -n 1 || echo "未知版本")
-                log_info "GOST 版本: $GOST_VERSION"
+            if [ $GOST_EXIT_CODE -eq 0 ]; then
+                log_info "✓ GOST 安装完成"
+            else
+                log_warn "GOST 安装可能失败（退出码: $GOST_EXIT_CODE），请手动检查"
             fi
+        fi
 
-            # 创建 GOST 配置目录
+        if command -v gost >/dev/null 2>&1; then
+            GOST_VERSION=$(gost -V 2>/dev/null | head -n 1 || echo "未知版本")
+            log_info "GOST 版本: $GOST_VERSION"
+
             log_info "创建 GOST 配置目录..."
             mkdir -p /etc/gost
 
-            # 创建 GOST 示例配置文件
             if [ ! -f /etc/gost/gost.yaml ]; then
                 log_info "创建 GOST 示例配置文件..."
                 cat > /etc/gost/gost.yaml << 'GOSTEOF'
@@ -363,11 +531,11 @@ services:
       type: tcp
 GOSTEOF
                 log_info "已创建示例配置: /etc/gost/gost.yaml"
+            else
+                log_info "GOST 配置已存在，跳过示例配置写入"
             fi
 
-            # 创建 systemd 服务文件
-            log_info "创建 GOST systemd 服务..."
-            cat > /etc/systemd/system/gost.service << 'SERVICEEOF'
+            GOST_SERVICE_CONTENT=$(cat << 'SERVICEEOF'
 [Unit]
 Description=Gost Proxy Service
 After=network.target
@@ -386,20 +554,21 @@ RestartSec=5s
 [Install]
 WantedBy=multi-user.target
 SERVICEEOF
+)
 
-            # 重载 systemd（但不启动和不设置开机启动）
-            log_info "配置 GOST 服务..."
-            systemctl daemon-reload
-            log_info "✓ GOST 服务文件已创建"
+            if ensure_file_content "/etc/systemd/system/gost.service" "$GOST_SERVICE_CONTENT"; then
+                log_info "配置 GOST 服务..."
+                systemctl daemon-reload
+                log_info "✓ GOST 服务文件已更新"
+            else
+                log_info "GOST 服务文件无变化，跳过重写"
+            fi
             log_warn "注意: GOST 未启动也未设置开机自启"
             log_info "提示: 修改配置后使用以下命令管理："
             log_info "  • 启动服务: systemctl start gost"
             log_info "  • 设置开机自启: systemctl enable gost"
             log_info "  • 同时启动并开机自启: systemctl enable --now gost"
-        else
-            log_warn "GOST 安装可能失败（退出码: $GOST_EXIT_CODE），请手动检查"
         fi
-    fi
     else
         log_info "已跳过 GOST 安装"
     fi
@@ -428,13 +597,10 @@ download_geosite() {
         "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat"
     )
 
-    for url in "${urls[@]}"; do
-        if curl -fsSL "$url" -o /etc/XrayR/geosite.dat 2>/dev/null; then
-            cp /etc/XrayR/geosite.dat /etc/V2bX/geosite.dat
-            log_info "GeoSite 规则文件下载完成"
-            return 0
-        fi
-    done
+    if download_if_missing "/etc/XrayR/geosite.dat" "${urls[@]}"; then
+        cp /etc/XrayR/geosite.dat /etc/V2bX/geosite.dat
+        return 0
+    fi
 
     log_warn "所有源均下载失败，请手动下载 geosite.dat"
     return 1
@@ -444,9 +610,8 @@ download_geosite
 
 # 下载 GeoIP 文件
 log_info "下载 GeoIP 规则文件..."
-if curl -fsSL "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat" -o /etc/XrayR/geoip.dat 2>/dev/null; then
+if download_if_missing "/etc/XrayR/geoip.dat" "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat"; then
     cp /etc/XrayR/geoip.dat /etc/V2bX/geoip.dat
-    log_info "GeoIP 规则文件下载完成"
 fi
 
 # ============================================
@@ -458,7 +623,7 @@ sleep 2  # 等待配置文件生成
 if ls /etc/XrayR*/config.yml 1> /dev/null 2>&1; then
     sed -i 's|RuleListPath: # /etc/XrayR/rulelist.*|RuleListPath: /etc/XrayR/rulelist|' /etc/XrayR*/config.yml 2>/dev/null || true
 
-    if wget -N https://raw.githubusercontent.com/put-go/blockList/main/blockList -O /etc/XrayR/rulelist 2>/dev/null; then
+    if download_if_missing "/etc/XrayR/rulelist" "https://raw.githubusercontent.com/put-go/blockList/main/blockList"; then
         log_info "审计规则配置完成"
     else
         log_warn "审计规则下载失败"
@@ -596,13 +761,17 @@ if [ "$OS_TYPE" = "alpine" ]; then
     fi
 else
     log_info "配置标准 XrayR 管理命令..."
-    if curl -fSL https://raw.githubusercontent.com/XrayR-project/XrayR-release/master/XrayR.sh -o /usr/bin/XrayR 2>/dev/null; then
-        chmod +x /usr/bin/XrayR
-        ln -sf /usr/bin/XrayR /usr/bin/xrayr
-        log_info "✓ 命令快捷方式设置完成"
-        log_info "现在可以使用 'XrayR' 或 'xrayr' 命令管理服务"
+    if [ -x /usr/bin/XrayR ] && [ -L /usr/bin/xrayr ]; then
+        log_info "XrayR 管理命令已存在，跳过重复配置"
     else
-        log_warn "管理脚本下载失败，请使用 systemctl 管理"
+        if curl -fSL https://raw.githubusercontent.com/XrayR-project/XrayR-release/master/XrayR.sh -o /usr/bin/XrayR 2>/dev/null; then
+            chmod +x /usr/bin/XrayR
+            ln -sf /usr/bin/XrayR /usr/bin/xrayr
+            log_info "✓ 命令快捷方式设置完成"
+            log_info "现在可以使用 'XrayR' 或 'xrayr' 命令管理服务"
+        else
+            log_warn "管理脚本下载失败，请使用 systemctl 管理"
+        fi
     fi
 fi
 
@@ -816,4 +985,3 @@ if [ "$OS_TYPE" = "alpine" ]; then
 fi
 
 exit 0
-
