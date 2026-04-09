@@ -125,6 +125,22 @@ download_if_missing() {
     return 1
 }
 
+download_with_overwrite() {
+    local target="$1"
+    shift
+    local urls=("$@")
+    local url
+
+    for url in "${urls[@]}"; do
+        if curl -fsSL "$url" -o "$target" 2>/dev/null; then
+            log_info "$(basename "$target") 已更新"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 configure_chrony_for_kvm() {
     if [ "$VIRT_TYPE" != "kvm" ]; then
         return 0
@@ -623,7 +639,7 @@ sleep 2  # 等待配置文件生成
 if ls /etc/XrayR*/config.yml 1> /dev/null 2>&1; then
     sed -i 's|RuleListPath: # /etc/XrayR/rulelist.*|RuleListPath: /etc/XrayR/rulelist|' /etc/XrayR*/config.yml 2>/dev/null || true
 
-    if download_if_missing "/etc/XrayR/rulelist" "https://raw.githubusercontent.com/put-go/blockList/main/blockList"; then
+    if download_with_overwrite "/etc/XrayR/rulelist" "https://raw.githubusercontent.com/put-go/blockList/main/blockList"; then
         log_info "审计规则配置完成"
     else
         log_warn "审计规则下载失败"
