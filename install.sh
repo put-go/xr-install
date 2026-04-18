@@ -267,7 +267,7 @@ download_geosite() {
         "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat"
     )
 
-    if download_if_missing "/etc/XrayR/geosite.dat" "${urls[@]}"; then
+    if download_with_overwrite "/etc/XrayR/geosite.dat" "${urls[@]}"; then
         cp /etc/XrayR/geosite.dat /etc/V2bX/geosite.dat
         log_info "GeoSite 规则文件下载完成"
         return 0
@@ -289,7 +289,7 @@ download_geoip() {
         "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip.dat"
     )
 
-    if download_if_missing "/etc/XrayR/geoip.dat" "${urls[@]}"; then
+    if download_with_overwrite "/etc/XrayR/geoip.dat" "${urls[@]}"; then
         cp /etc/XrayR/geoip.dat /etc/V2bX/geoip.dat
         log_info "GeoIP 规则文件下载完成"
         return 0
