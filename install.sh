@@ -327,16 +327,11 @@ if [ "$1" = "--vim" ] || [ "$1" = "-v" ]; then
     exit 0
 fi
 
-if [ "$1" = "--geosite" ] || [ "$1" = "-gs" ]; then
+if [ "$1" = "--dat" ] || [ "$1" = "-d" ]; then
     check_root
     download_geosite
-    exit $?
-fi
-
-if [ "$1" = "--geoip" ] || [ "$1" = "-gi" ]; then
-    check_root
     download_geoip
-    exit $?
+    exit 0
 fi
 
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
@@ -344,8 +339,7 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo ""
     echo "选项:"
     echo "  --vim, -v     仅配置 Vim 编辑器"
-    echo "  --geosite, -gs 仅下载 geosite.dat"
-    echo "  --geoip, -gi   仅下载 geoip.dat"
+    echo "  --dat, -d     下载 geosite.dat 和 geoip.dat"
     echo "  --help, -h    显示此帮助信息"
     echo ""
     echo "不带参数运行将执行完整安装流程"
