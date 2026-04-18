@@ -255,6 +255,50 @@ configure_vim() {
     echo ""
 }
 
+# 下载 GeoSite 规则文件的独立函数
+download_geosite() {
+    log_step "下载 GeoSite 规则文件..."
+
+    mkdir -p /etc/XrayR/ /etc/V2bX/
+
+    local urls=(
+        "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat"
+        "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat"
+        "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat"
+    )
+
+    if download_if_missing "/etc/XrayR/geosite.dat" "${urls[@]}"; then
+        cp /etc/XrayR/geosite.dat /etc/V2bX/geosite.dat
+        log_info "GeoSite 规则文件下载完成"
+        return 0
+    fi
+
+    log_warn "所有源均下载失败，请手动下载 geosite.dat"
+    return 1
+}
+
+# 下载 GeoIP 规则文件的独立函数
+download_geoip() {
+    log_step "下载 GeoIP 规则文件..."
+
+    mkdir -p /etc/XrayR/ /etc/V2bX/
+
+    local urls=(
+        "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat"
+        "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat"
+        "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip.dat"
+    )
+
+    if download_if_missing "/etc/XrayR/geoip.dat" "${urls[@]}"; then
+        cp /etc/XrayR/geoip.dat /etc/V2bX/geoip.dat
+        log_info "GeoIP 规则文件下载完成"
+        return 0
+    fi
+
+    log_warn "所有源均下载失败，请手动下载 geoip.dat"
+    return 1
+}
+
 # 检查服务器配置（CPU 和 内存）
 check_server_specs() {
     # 获取 CPU 核心数
@@ -283,11 +327,25 @@ if [ "$1" = "--vim" ] || [ "$1" = "-v" ]; then
     exit 0
 fi
 
+if [ "$1" = "--geosite" ] || [ "$1" = "-gs" ]; then
+    check_root
+    download_geosite
+    exit $?
+fi
+
+if [ "$1" = "--geoip" ] || [ "$1" = "-gi" ]; then
+    check_root
+    download_geoip
+    exit $?
+fi
+
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "用法: $0 [选项]"
     echo ""
     echo "选项:"
     echo "  --vim, -v     仅配置 Vim 编辑器"
+    echo "  --geosite, -gs 仅下载 geosite.dat"
+    echo "  --geoip, -gi   仅下载 geoip.dat"
     echo "  --help, -h    显示此帮助信息"
     echo ""
     echo "不带参数运行将执行完整安装流程"
@@ -604,31 +662,10 @@ log_info "配置目录创建完成"
 # ============================================
 # 步骤 5: 下载 GeoSite 规则
 # ============================================
-log_step "5. 下载 GeoSite 规则文件..."
-
-download_geosite() {
-    local urls=(
-        "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat"
-        "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat"
-        "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat"
-    )
-
-    if download_if_missing "/etc/XrayR/geosite.dat" "${urls[@]}"; then
-        cp /etc/XrayR/geosite.dat /etc/V2bX/geosite.dat
-        return 0
-    fi
-
-    log_warn "所有源均下载失败，请手动下载 geosite.dat"
-    return 1
-}
-
 download_geosite
 
 # 下载 GeoIP 文件
-log_info "下载 GeoIP 规则文件..."
-if download_if_missing "/etc/XrayR/geoip.dat" "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat"; then
-    cp /etc/XrayR/geoip.dat /etc/V2bX/geoip.dat
-fi
+download_geoip
 
 # ============================================
 # 步骤 6: 配置审计规则
