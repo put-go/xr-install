@@ -353,7 +353,7 @@ check_server_specs() {
 }
 
 # 处理命令行参数
-INSTALL_TARGET="xrayr"
+INSTALL_TARGET=""
 
 if [ "$1" = "--v2bx" ] || [ "$1" = "v2bx" ]; then
     INSTALL_TARGET="v2bx"
@@ -380,14 +380,41 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "用法: $0 [选项]"
     echo ""
     echo "选项:"
-    echo "  --xrayr       执行 XrayR 完整安装（默认）"
+    echo "  --xrayr       执行 XrayR 完整安装"
     echo "  --v2bx        执行 V2bX 完整安装"
     echo "  --vim, -v     仅配置 Vim 编辑器"
     echo "  --dat, -d     下载 geosite.dat 和 geoip.dat"
     echo "  --help, -h    显示此帮助信息"
     echo ""
-    echo "不带参数运行将执行 XrayR 完整安装流程"
+    echo "不带参数运行将提示选择安装 XrayR 或 V2bX"
     exit 0
+fi
+
+if [ -n "$1" ]; then
+    log_error "未知参数: $1"
+    echo "使用 '$0 --help' 查看支持的参数"
+    exit 1
+fi
+
+if [ -z "$INSTALL_TARGET" ]; then
+    echo ""
+    echo -e "${BLUE}请选择安装目标：${NC}"
+    echo "  1) XrayR"
+    echo "  2) V2bX"
+    read -p "请输入序号 [1-2]: " INSTALL_CHOICE
+
+    case "$INSTALL_CHOICE" in
+        1)
+            INSTALL_TARGET="xrayr"
+            ;;
+        2)
+            INSTALL_TARGET="v2bx"
+            ;;
+        *)
+            log_error "无效选择，请重新运行脚本并输入 1 或 2"
+            exit 1
+            ;;
+    esac
 fi
 
 check_root
