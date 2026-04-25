@@ -1,14 +1,14 @@
 #!/bin/bash
 
 #================================================================
-# XrayR 自动化安装配置脚本
-# 功能：安装 XrayR、GOST、配置审计规则、系统优化、网络加速
+# XrayR / V2bX 自动化安装配置脚本
+# 功能：安装 XrayR 或 V2bX、GOST、配置审计规则、系统优化、网络加速
 #================================================================
 
 set -e  # 遇到错误立即退出
 
 echo "========================================="
-echo "  XrayR 自动化安装配置脚本"
+echo "  XrayR / V2bX 自动化安装配置脚本"
 echo "========================================="
 
 # 颜色定义
@@ -37,6 +37,38 @@ log_step() {
 
 command_exists() {
     command -v "$1" >/dev/null 2>&1
+}
+
+is_xrayr_target() {
+    [ "$INSTALL_TARGET" = "xrayr" ]
+}
+
+is_v2bx_target() {
+    [ "$INSTALL_TARGET" = "v2bx" ]
+}
+
+get_target_name() {
+    if is_v2bx_target; then
+        echo "V2bX"
+    else
+        echo "XrayR"
+    fi
+}
+
+is_xrayr_installed() {
+    if [ "$OS_TYPE" = "alpine" ]; then
+        [ -f /etc/XrayR/config.yml ] || [ -f /etc/init.d/XrayR ]
+    else
+        [ -f /etc/XrayR/config.yml ] || systemctl list-unit-files 2>/dev/null | grep -q "^XrayR.service"
+    fi
+}
+
+is_v2bx_installed() {
+    if [ "$OS_TYPE" = "alpine" ]; then
+        [ -x /usr/local/V2bX/V2bX ] || [ -f /etc/init.d/V2bX ]
+    else
+        [ -x /usr/local/V2bX/V2bX ] || systemctl list-unit-files 2>/dev/null | grep -q "^V2bX.service"
+    fi
 }
 
 file_contains() {
@@ -321,6 +353,16 @@ check_server_specs() {
 }
 
 # 处理命令行参数
+INSTALL_TARGET="xrayr"
+
+if [ "$1" = "--v2bx" ] || [ "$1" = "v2bx" ]; then
+    INSTALL_TARGET="v2bx"
+    shift
+elif [ "$1" = "--xrayr" ] || [ "$1" = "xrayr" ]; then
+    INSTALL_TARGET="xrayr"
+    shift
+fi
+
 if [ "$1" = "--vim" ] || [ "$1" = "-v" ]; then
     check_root
     configure_vim
@@ -338,11 +380,13 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "用法: $0 [选项]"
     echo ""
     echo "选项:"
+    echo "  --xrayr       执行 XrayR 完整安装（默认）"
+    echo "  --v2bx        执行 V2bX 完整安装"
     echo "  --vim, -v     仅配置 Vim 编辑器"
     echo "  --dat, -d     下载 geosite.dat 和 geoip.dat"
     echo "  --help, -h    显示此帮助信息"
     echo ""
-    echo "不带参数运行将执行完整安装流程"
+    echo "不带参数运行将执行 XrayR 完整安装流程"
     exit 0
 fi
 
@@ -351,6 +395,7 @@ check_root
 # 检测系统类型（提前检测）
 OS_TYPE=$(detect_os)
 log_info "检测到系统类型: $OS_TYPE"
+log_info "安装目标: $(get_target_name)"
 
 # 检测虚拟化类型
 VIRT_TYPE="none"
@@ -405,7 +450,7 @@ if [ "$OS_TYPE" = "alpine" ] || [ "$VIRT_TYPE" = "lxc" ]; then
     if [ "$VIRT_TYPE" = "lxc" ]; then
         log_info "LXC 容器环境，内核参数由宿主机管理"
     fi
-    log_info "默认配置已足够满足 XrayR 运行需求"
+    log_info "默认配置已足够满足 $(get_target_name) 运行需求"
 else
     log_step "1. 系统内核优化..."
 
@@ -501,27 +546,51 @@ EOF
 fi
 
 # ============================================
-# 步骤 2: 安装 XrayR
+# 步骤 2: 安装核心服务
 # ============================================
-log_step "2. 安装 XrayR..."
+log_step "2. 安装 $(get_target_name)..."
 
-if [ "$OS_TYPE" = "alpine" ]; then
-    # Alpine 系统使用专用安装脚本
-    if [ -f /etc/XrayR/config.yml ] || [ -f /etc/init.d/XrayR ]; then
+if is_v2bx_target; then
+    if is_v2bx_installed; then
+        log_info "检测到 V2bX 已安装，跳过重复安装"
+    else
+        log_info "使用官方 V2bX 安装脚本..."
+        if wget -N -O v2bx-install.sh https://raw.githubusercontent.com/wyx2685/V2bX-script/master/install.sh 2>/dev/null; then
+            chmod +x v2bx-install.sh
+
+            set +e
+            bash v2bx-install.sh
+            V2BX_EXIT_CODE=$?
+            set -e
+
+            rm -f v2bx-install.sh
+
+            if [ $V2BX_EXIT_CODE -eq 0 ]; then
+                log_info "V2bX 安装完成"
+            else
+                log_warn "V2bX 安装可能存在问题（退出码: $V2BX_EXIT_CODE）"
+            fi
+        else
+            log_error "V2bX 安装脚本下载失败"
+            exit 1
+        fi
+    fi
+elif [ "$OS_TYPE" = "alpine" ]; then
+    if is_xrayr_installed; then
         log_info "检测到 XrayR 已安装，跳过重复安装"
     else
         log_info "使用 Alpine 专用 XrayR 安装脚本..."
         if wget -O alpine-xrayr-install.sh https://raw.githubusercontent.com/put-go/alpineXrayR/refs/heads/main/XrayR_Alpine/install-xrayr.sh 2>/dev/null; then
         chmod +x alpine-xrayr-install.sh
-        
+
         # 临时禁用错误退出
         set +e
         bash alpine-xrayr-install.sh
         XRAYR_EXIT_CODE=$?
         set -e
-        
+
         rm -f alpine-xrayr-install.sh
-        
+
             if [ $XRAYR_EXIT_CODE -eq 0 ]; then
                 log_info "Alpine XrayR 安装完成"
             else
@@ -533,8 +602,7 @@ if [ "$OS_TYPE" = "alpine" ]; then
         fi
     fi
 else
-    # 非 Alpine 系统使用标准安装脚本
-    if [ -f /etc/XrayR/config.yml ] || systemctl list-unit-files 2>/dev/null | grep -q "^XrayR.service"; then
+    if is_xrayr_installed; then
         log_info "检测到 XrayR 已安装，跳过重复安装"
     else
         log_info "使用标准 XrayR 安装脚本..."
@@ -667,7 +735,7 @@ download_geoip
 log_step "6. 配置审计规则..."
 
 sleep 2  # 等待配置文件生成
-if ls /etc/XrayR*/config.yml 1> /dev/null 2>&1; then
+if is_xrayr_installed && ls /etc/XrayR*/config.yml 1> /dev/null 2>&1; then
     sed -i 's|RuleListPath: # /etc/XrayR/rulelist.*|RuleListPath: /etc/XrayR/rulelist|' /etc/XrayR*/config.yml 2>/dev/null || true
 
     if download_with_overwrite "/etc/XrayR/rulelist" "https://raw.githubusercontent.com/put-go/blockList/main/blockList"; then
@@ -675,6 +743,8 @@ if ls /etc/XrayR*/config.yml 1> /dev/null 2>&1; then
     else
         log_warn "审计规则下载失败"
     fi
+elif is_v2bx_target; then
+    log_info "当前安装目标为 V2bX，跳过 XrayR 审计规则写入"
 else
     log_warn "配置文件不存在，跳过审计规则设置"
 fi
@@ -826,7 +896,7 @@ fi
 # 步骤 11: 清理临时文件
 # ============================================
 log_step "11. 清理临时文件..."
-rm -f install.sh FastBench.sh xrayr-install.sh alpine-xrayr-install.sh
+rm -f install.sh FastBench.sh xrayr-install.sh alpine-xrayr-install.sh v2bx-install.sh
 log_info "临时文件清理完成"
 
 # ============================================
@@ -893,6 +963,35 @@ if [ -f /etc/XrayR/config.yml ]; then
     fi
 fi
 
+if [ -x /usr/local/V2bX/V2bX ] || [ -f /etc/V2bX/config.json ]; then
+    echo "  ✓ V2bX"
+
+    if [ "$OS_TYPE" = "alpine" ]; then
+        if [ -f /etc/init.d/V2bX ]; then
+            echo "    • 服务文件: /etc/init.d/V2bX"
+            if rc-service V2bX status 2>/dev/null | grep -q "started"; then
+                echo "    • 运行状态: 运行中"
+            else
+                echo "    • 运行状态: 未运行"
+            fi
+
+            if rc-update show 2>/dev/null | grep -q V2bX; then
+                echo "    • 开机自启: 已启用"
+            else
+                echo "    • 开机自启: 未启用"
+            fi
+        fi
+    else
+        if systemctl is-active --quiet V2bX 2>/dev/null; then
+            echo "    • 运行状态: 运行中"
+        elif systemctl is-enabled --quiet V2bX 2>/dev/null; then
+            echo "    • 运行状态: 已启用（未运行）"
+        else
+            echo "    • 运行状态: 未运行"
+        fi
+    fi
+fi
+
 if command -v gost >/dev/null 2>&1; then
     GOST_VER=$(gost -V 2>/dev/null | head -n 1 || echo "已安装")
     echo "  ✓ GOST ($GOST_VER)"
@@ -910,10 +1009,17 @@ fi
 # 配置文件位置
 echo ""
 echo -e "${BLUE}配置文件位置：${NC}"
-echo "  • XrayR 配置: /etc/XrayR/config.yml"
-echo "  • 审计规则: /etc/XrayR/rulelist"
-echo "  • GeoSite: /etc/XrayR/geosite.dat"
-echo "  • GeoIP: /etc/XrayR/geoip.dat"
+if [ -f /etc/XrayR/config.yml ]; then
+    echo "  • XrayR 配置: /etc/XrayR/config.yml"
+    echo "  • 审计规则: /etc/XrayR/rulelist"
+fi
+if [ -f /etc/V2bX/config.json ]; then
+    echo "  • V2bX 配置: /etc/V2bX/config.json"
+fi
+echo "  • XrayR GeoSite: /etc/XrayR/geosite.dat"
+echo "  • XrayR GeoIP: /etc/XrayR/geoip.dat"
+echo "  • V2bX GeoSite: /etc/V2bX/geosite.dat"
+echo "  • V2bX GeoIP: /etc/V2bX/geoip.dat"
 if [ -f /etc/gost/gost.yaml ]; then
     echo "  • GOST 配置: /etc/gost/gost.yaml"
 fi
@@ -925,12 +1031,20 @@ echo -e "${BLUE}服务管理命令：${NC}"
 
 if [ "$OS_TYPE" = "alpine" ]; then
     echo "  ${YELLOW}Alpine 使用 OpenRC 管理：${NC}"
-    echo "  • 启动服务: rc-service XrayR start"
-    echo "  • 停止服务: rc-service XrayR stop"
-    echo "  • 重启服务: rc-service XrayR restart"
-    echo "  • 查看状态: rc-service XrayR status"
-    echo "  • 开机自启: rc-update add XrayR default"
-    echo "  • 取消自启: rc-update del XrayR default"
+    if [ -f /etc/init.d/XrayR ]; then
+        echo "  • 启动 XrayR: rc-service XrayR start"
+        echo "  • 停止 XrayR: rc-service XrayR stop"
+        echo "  • 重启 XrayR: rc-service XrayR restart"
+        echo "  • 查看 XrayR: rc-service XrayR status"
+        echo "  • XrayR 自启: rc-update add XrayR default"
+    fi
+    if [ -f /etc/init.d/V2bX ]; then
+        echo "  • 启动 V2bX: rc-service V2bX start"
+        echo "  • 停止 V2bX: rc-service V2bX stop"
+        echo "  • 重启 V2bX: rc-service V2bX restart"
+        echo "  • 查看 V2bX: rc-service V2bX status"
+        echo "  • V2bX 自启: rc-update add V2bX default"
+    fi
     echo ""
     echo "  ${YELLOW}查看服务：${NC}"
     echo "  • 列出所有服务: rc-status"
@@ -946,19 +1060,41 @@ else
         echo "  • 查看日志: XrayR log"
         echo ""
     fi
+    if [ -x /usr/local/V2bX/V2bX ]; then
+        echo "  ${YELLOW}V2bX 管理：${NC}"
+        echo "  • 启动服务: systemctl start V2bX"
+        echo "  • 停止服务: systemctl stop V2bX"
+        echo "  • 重启服务: systemctl restart V2bX"
+        echo "  • 查看状态: systemctl status V2bX"
+        echo "  • 查看日志: journalctl -u V2bX -f"
+        echo ""
+    fi
     echo "  ${YELLOW}使用 systemctl：${NC}"
-    echo "  • 启动服务: systemctl start XrayR"
-    echo "  • 停止服务: systemctl stop XrayR"
-    echo "  • 重启服务: systemctl restart XrayR"
-    echo "  • 查看状态: systemctl status XrayR"
-    echo "  • 开机自启: systemctl enable XrayR"
-    echo "  • 取消自启: systemctl disable XrayR"
+    if [ -f /etc/XrayR/config.yml ]; then
+        echo "  • 启动 XrayR: systemctl start XrayR"
+        echo "  • 停止 XrayR: systemctl stop XrayR"
+        echo "  • 重启 XrayR: systemctl restart XrayR"
+        echo "  • 查看 XrayR: systemctl status XrayR"
+        echo "  • XrayR 自启: systemctl enable XrayR"
+    fi
+    if [ -x /usr/local/V2bX/V2bX ]; then
+        echo "  • 启动 V2bX: systemctl start V2bX"
+        echo "  • 停止 V2bX: systemctl stop V2bX"
+        echo "  • 重启 V2bX: systemctl restart V2bX"
+        echo "  • 查看 V2bX: systemctl status V2bX"
+        echo "  • V2bX 自启: systemctl enable V2bX"
+    fi
 fi
 
 echo ""
 echo -e "${BLUE}配置编辑：${NC}"
-echo "  • 编辑配置: vim /etc/XrayR/config.yml"
-echo "  • 编辑规则: vim /etc/XrayR/rulelist"
+if [ -f /etc/XrayR/config.yml ]; then
+    echo "  • 编辑 XrayR 配置: vim /etc/XrayR/config.yml"
+    echo "  • 编辑 XrayR 规则: vim /etc/XrayR/rulelist"
+fi
+if [ -f /etc/V2bX/config.json ]; then
+    echo "  • 编辑 V2bX 配置: vim /etc/V2bX/config.json"
+fi
 
 if command -v gost >/dev/null 2>&1; then
     echo ""
@@ -977,6 +1113,8 @@ fi
 
 echo ""
 echo -e "${BLUE}脚本特殊参数：${NC}"
+echo "  • 安装 XrayR: bash <(wget -qO- https://raw.githubusercontent.com/put-go/xr-install/refs/heads/master/install.sh) --xrayr"
+echo "  • 安装 V2bX: bash <(wget -qO- https://raw.githubusercontent.com/put-go/xr-install/refs/heads/master/install.sh) --v2bx"
 echo "  • 单独配置 Vim: bash <(wget -qO- https://raw.githubusercontent.com/put-go/xr-install/refs/heads/master/install.sh) --vim"
 echo "  • 查看帮助: bash <(wget -qO- https://raw.githubusercontent.com/put-go/xr-install/refs/heads/master/install.sh) --help"
 echo ""
@@ -987,17 +1125,32 @@ echo -e "${GREEN}===============================================================
 echo ""
 
 echo -e "${YELLOW}下一步操作提示:${NC}"
-echo -e "${YELLOW}  1. 编辑 XrayR 配置: vim /etc/XrayR/config.yml${NC}"
-echo -e "${YELLOW}  2. 配置对接面板信息（ApiHost、ApiKey、NodeID 等）${NC}"
+if is_v2bx_target; then
+    echo -e "${YELLOW}  1. 编辑 V2bX 配置: vim /etc/V2bX/config.json${NC}"
+    echo -e "${YELLOW}  2. 配置对接面板信息（ApiHost、ApiKey、NodeID 等）${NC}"
 
-if [ "$OS_TYPE" = "alpine" ]; then
-    echo -e "${YELLOW}  3. 启动 XrayR: rc-service XrayR start${NC}"
-    echo -e "${YELLOW}  4. 检查状态: rc-service XrayR status${NC}"
-    echo -e "${YELLOW}  5. 设置自启: rc-update add XrayR default${NC}"
+    if [ "$OS_TYPE" = "alpine" ]; then
+        echo -e "${YELLOW}  3. 启动 V2bX: rc-service V2bX start${NC}"
+        echo -e "${YELLOW}  4. 检查状态: rc-service V2bX status${NC}"
+        echo -e "${YELLOW}  5. 设置自启: rc-update add V2bX default${NC}"
+    else
+        echo -e "${YELLOW}  3. 启动 V2bX: systemctl start V2bX${NC}"
+        echo -e "${YELLOW}  4. 检查状态: systemctl status V2bX${NC}"
+        echo -e "${YELLOW}  5. 设置自启: systemctl enable V2bX${NC}"
+    fi
 else
-    echo -e "${YELLOW}  3. 启动 XrayR: systemctl start XrayR 或 XrayR start${NC}"
-    echo -e "${YELLOW}  4. 检查状态: systemctl status XrayR 或 XrayR status${NC}"
-    echo -e "${YELLOW}  5. 设置自启: systemctl enable XrayR${NC}"
+    echo -e "${YELLOW}  1. 编辑 XrayR 配置: vim /etc/XrayR/config.yml${NC}"
+    echo -e "${YELLOW}  2. 配置对接面板信息（ApiHost、ApiKey、NodeID 等）${NC}"
+
+    if [ "$OS_TYPE" = "alpine" ]; then
+        echo -e "${YELLOW}  3. 启动 XrayR: rc-service XrayR start${NC}"
+        echo -e "${YELLOW}  4. 检查状态: rc-service XrayR status${NC}"
+        echo -e "${YELLOW}  5. 设置自启: rc-update add XrayR default${NC}"
+    else
+        echo -e "${YELLOW}  3. 启动 XrayR: systemctl start XrayR 或 XrayR start${NC}"
+        echo -e "${YELLOW}  4. 检查状态: systemctl status XrayR 或 XrayR status${NC}"
+        echo -e "${YELLOW}  5. 设置自启: systemctl enable XrayR${NC}"
+    fi
 fi
 
 if [ -f /etc/gost/gost.yaml ]; then
@@ -1016,18 +1169,25 @@ if [ "$OS_TYPE" = "alpine" ]; then
     echo -e "${YELLOW}  • Alpine 使用轻量级设计，已跳过内核优化${NC}"
     echo -e "${YELLOW}  • Alpine 不支持 GOST，已自动跳过${NC}"
     echo -e "${YELLOW}  • Alpine 使用 OpenRC 管理服务（非 systemd）${NC}"
-    echo -e "${YELLOW}  • OpenRC 服务文件: /etc/init.d/XrayR${NC}"
-    echo -e "${YELLOW}  • 默认配置已足够满足 XrayR 运行需求${NC}"
+    echo -e "${YELLOW}  • 默认配置已足够满足 $(get_target_name) 运行需求${NC}"
     echo ""
     echo -e "${BLUE}OpenRC 常用命令：${NC}"
     echo -e "  • 查看所有服务: ${GREEN}rc-status${NC}"
     echo -e "  • 查看启动项: ${GREEN}rc-update show${NC}"
-    echo -e "  • 启动服务: ${GREEN}rc-service XrayR start${NC}"
-    echo -e "  • 停止服务: ${GREEN}rc-service XrayR stop${NC}"
-    echo -e "  • 重启服务: ${GREEN}rc-service XrayR restart${NC}"
-    echo -e "  • 查看状态: ${GREEN}rc-service XrayR status${NC}"
-    echo -e "  • 添加自启: ${GREEN}rc-update add XrayR default${NC}"
-    echo -e "  • 移除自启: ${GREEN}rc-update del XrayR default${NC}"
+    if [ -f /etc/init.d/XrayR ]; then
+        echo -e "  • 启动 XrayR: ${GREEN}rc-service XrayR start${NC}"
+        echo -e "  • 停止 XrayR: ${GREEN}rc-service XrayR stop${NC}"
+        echo -e "  • 重启 XrayR: ${GREEN}rc-service XrayR restart${NC}"
+        echo -e "  • 查看 XrayR: ${GREEN}rc-service XrayR status${NC}"
+        echo -e "  • XrayR 自启: ${GREEN}rc-update add XrayR default${NC}"
+    fi
+    if [ -f /etc/init.d/V2bX ]; then
+        echo -e "  • 启动 V2bX: ${GREEN}rc-service V2bX start${NC}"
+        echo -e "  • 停止 V2bX: ${GREEN}rc-service V2bX stop${NC}"
+        echo -e "  • 重启 V2bX: ${GREEN}rc-service V2bX restart${NC}"
+        echo -e "  • 查看 V2bX: ${GREEN}rc-service V2bX status${NC}"
+        echo -e "  • V2bX 自启: ${GREEN}rc-update add V2bX default${NC}"
+    fi
     echo ""
 fi
 
