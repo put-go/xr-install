@@ -197,11 +197,11 @@ EOF
             rc-service chronyd start >/dev/null 2>&1 || true
         fi
     else
-        if ! systemctl is-enabled --quiet "$CHRONY_SERVICE" 2>/dev/null; then
-            systemctl enable "$CHRONY_SERVICE" >/dev/null 2>&1 || true
-        fi
-        if ! systemctl is-active --quiet "$CHRONY_SERVICE" 2>/dev/null; then
-            systemctl start "$CHRONY_SERVICE" >/dev/null 2>&1 || systemctl restart "$CHRONY_SERVICE" >/dev/null 2>&1 || true
+        if ! systemctl is-enabled --quiet "$CHRONY_SERVICE" 2>/dev/null || ! systemctl is-active --quiet "$CHRONY_SERVICE" 2>/dev/null; then
+            systemctl enable --now "$CHRONY_SERVICE" >/dev/null 2>&1 || {
+                systemctl enable "$CHRONY_SERVICE" >/dev/null 2>&1 || true
+                systemctl start "$CHRONY_SERVICE" >/dev/null 2>&1 || systemctl restart "$CHRONY_SERVICE" >/dev/null 2>&1 || true
+            }
         fi
     fi
 
