@@ -354,29 +354,15 @@ check_server_specs() {
 
 # 处理命令行参数
 INSTALL_TARGET=""
+SCRIPT_ACTION=""
+V2BX_GENERATE_CONFIG=""
+GOST_CHOICE=""
+BENCH_CHOICE=""
+NEZHA_CHOICE=""
+NZ_SERVER_INPUT=""
+NZ_SECRET_INPUT=""
 
-if [ "$1" = "--v2bx" ] || [ "$1" = "v2bx" ]; then
-    INSTALL_TARGET="v2bx"
-    shift
-elif [ "$1" = "--xrayr" ] || [ "$1" = "xrayr" ]; then
-    INSTALL_TARGET="xrayr"
-    shift
-fi
-
-if [ "$1" = "--vim" ] || [ "$1" = "-v" ]; then
-    check_root
-    configure_vim
-    exit 0
-fi
-
-if [ "$1" = "--dat" ] || [ "$1" = "-d" ]; then
-    check_root
-    download_geosite
-    download_geoip
-    exit 0
-fi
-
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+show_help() {
     echo "用法: $0 [选项]"
     echo ""
     echo "选项:"
@@ -384,16 +370,112 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "  --v2bx        执行 V2bX 完整安装"
     echo "  --vim, -v     仅配置 Vim 编辑器"
     echo "  --dat, -d     下载 geosite.dat 和 geoip.dat"
+    echo "  --no-v2bx-generate  V2bX 安装时不自动生成配置文件"
+    echo "  --v2bx-generate     V2bX 安装时自动生成配置文件"
+    echo "  --no-gost           跳过 GOST 安装"
+    echo "  --gost              安装 GOST"
+    echo "  --no-bench          跳过服务器性能测试"
+    echo "  --bench             执行服务器性能测试"
+    echo "  --no-nezha          跳过 Nezha 监控探针安装"
+    echo "  --nezha             安装 Nezha 监控探针（使用默认或传入的服务器信息）"
+    echo "  --nezha-server 地址 设置 Nezha 服务器地址"
+    echo "  --nezha-secret 密钥 设置 Nezha 客户端密钥"
     echo "  --help, -h    显示此帮助信息"
     echo ""
     echo "不带参数运行将提示选择安装 XrayR 或 V2bX"
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --v2bx|v2bx)
+            INSTALL_TARGET="v2bx"
+            shift
+            ;;
+        --xrayr|xrayr)
+            INSTALL_TARGET="xrayr"
+            shift
+            ;;
+        --vim|-v)
+            SCRIPT_ACTION="vim"
+            shift
+            ;;
+        --dat|-d)
+            SCRIPT_ACTION="dat"
+            shift
+            ;;
+        --no-v2bx-generate)
+            V2BX_GENERATE_CONFIG="n"
+            shift
+            ;;
+        --v2bx-generate)
+            V2BX_GENERATE_CONFIG="y"
+            shift
+            ;;
+        --no-gost)
+            GOST_CHOICE="n"
+            shift
+            ;;
+        --gost|--install-gost)
+            GOST_CHOICE="y"
+            shift
+            ;;
+        --no-bench)
+            BENCH_CHOICE="n"
+            shift
+            ;;
+        --bench|--run-bench)
+            BENCH_CHOICE="y"
+            shift
+            ;;
+        --no-nezha)
+            NEZHA_CHOICE="n"
+            shift
+            ;;
+        --nezha|--install-nezha)
+            NEZHA_CHOICE="y"
+            shift
+            ;;
+        --nezha-server)
+            if [ -z "$2" ]; then
+                log_error "--nezha-server 需要传入服务器地址"
+                exit 1
+            fi
+            NZ_SERVER_INPUT="$2"
+            NEZHA_CHOICE="${NEZHA_CHOICE:-y}"
+            shift 2
+            ;;
+        --nezha-secret)
+            if [ -z "$2" ]; then
+                log_error "--nezha-secret 需要传入客户端密钥"
+                exit 1
+            fi
+            NZ_SECRET_INPUT="$2"
+            NEZHA_CHOICE="${NEZHA_CHOICE:-y}"
+            shift 2
+            ;;
+        --help|-h)
+            show_help
+            exit 0
+            ;;
+        *)
+            log_error "未知参数: $1"
+            echo "使用 '$0 --help' 查看支持的参数"
+            exit 1
+            ;;
+    esac
+done
+
+if [ "$SCRIPT_ACTION" = "vim" ]; then
+    check_root
+    configure_vim
     exit 0
 fi
 
-if [ -n "$1" ]; then
-    log_error "未知参数: $1"
-    echo "使用 '$0 --help' 查看支持的参数"
-    exit 1
+if [ "$SCRIPT_ACTION" = "dat" ]; then
+    check_root
+    download_geosite
+    download_geoip
+    exit 0
 fi
 
 if [ -z "$INSTALL_TARGET" ]; then
@@ -586,7 +668,11 @@ if is_v2bx_target; then
             chmod +x v2bx-install.sh
 
             set +e
-            bash v2bx-install.sh
+            if [ -n "$V2BX_GENERATE_CONFIG" ]; then
+                printf '%s\n' "$V2BX_GENERATE_CONFIG" | bash v2bx-install.sh
+            else
+                bash v2bx-install.sh
+            fi
             V2BX_EXIT_CODE=$?
             set -e
 
@@ -650,8 +736,13 @@ fi
 if [ "$OS_TYPE" != "alpine" ]; then
     log_step "3. 安装 GOST..."
 
-    read -p "是否安装 GOST？(y/n，默认n): " -n 1 -r
-    echo
+    if [ -n "$GOST_CHOICE" ]; then
+        REPLY="$GOST_CHOICE"
+        log_info "GOST 安装选项: $GOST_CHOICE"
+    else
+        read -p "是否安装 GOST？(y/n，默认n): " -n 1 -r
+        echo
+    fi
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         if command -v gost >/dev/null 2>&1; then
             log_info "检测到 GOST 已安装，跳过重复安装"
@@ -794,8 +885,13 @@ else
 
     # 检查服务器配置
     if check_server_specs; then
-        read -p "是否进行服务器性能测试？(y/n，默认n): " -n 1 -r
-        echo
+        if [ -n "$BENCH_CHOICE" ]; then
+            REPLY="$BENCH_CHOICE"
+            log_info "性能测试选项: $BENCH_CHOICE"
+        else
+            read -p "是否进行服务器性能测试？(y/n，默认n): " -n 1 -r
+            echo
+        fi
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             log_info "开始性能测试..."
 
@@ -840,16 +936,23 @@ fi
 # ============================================
 log_step "9. 安装监控探针..."
 
-read -p "是否安装 Nezha 监控探针？(y/n，默认n): " -n 1 -r
-echo
+if [ -n "$NEZHA_CHOICE" ]; then
+    REPLY="$NEZHA_CHOICE"
+    log_info "Nezha 监控探针安装选项: $NEZHA_CHOICE"
+else
+    read -p "是否安装 Nezha 监控探针？(y/n，默认n): " -n 1 -r
+    echo
+fi
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     log_info "开始安装 Nezha 监控探针..."
 
     # 提示用户输入服务器信息
-    echo ""
-    echo -e "${YELLOW}请输入 Nezha 服务器信息（直接回车使用默认值）：${NC}"
-    read -p "服务器地址 [默认: nz.supergene.top:443]: " NZ_SERVER_INPUT
-    read -p "客户端密钥 [默认: BVvcAVXU5mBNgmYt3uyckSTAX3HxoiEJ]: " NZ_SECRET_INPUT
+    if [ -z "$NEZHA_CHOICE" ] && [ -z "$NZ_SERVER_INPUT" ] && [ -z "$NZ_SECRET_INPUT" ]; then
+        echo ""
+        echo -e "${YELLOW}请输入 Nezha 服务器信息（直接回车使用默认值）：${NC}"
+        read -p "服务器地址 [默认: nz.supergene.top:443]: " NZ_SERVER_INPUT
+        read -p "客户端密钥 [默认: BVvcAVXU5mBNgmYt3uyckSTAX3HxoiEJ]: " NZ_SECRET_INPUT
+    fi
 
     # 使用用户输入或默认值
     NZ_SERVER=${NZ_SERVER_INPUT:-"nz.supergene.top:443"}
@@ -1142,6 +1245,7 @@ echo ""
 echo -e "${BLUE}脚本特殊参数：${NC}"
 echo "  • 安装 XrayR: bash <(wget -qO- https://raw.githubusercontent.com/put-go/xr-install/refs/heads/master/install.sh) --xrayr"
 echo "  • 安装 V2bX: bash <(wget -qO- https://raw.githubusercontent.com/put-go/xr-install/refs/heads/master/install.sh) --v2bx"
+echo "  • V2bX 非交互跳过可选项: bash <(wget -qO- https://raw.githubusercontent.com/put-go/xr-install/refs/heads/master/install.sh) --v2bx --no-v2bx-generate --no-gost --no-bench --no-nezha"
 echo "  • 单独配置 Vim: bash <(wget -qO- https://raw.githubusercontent.com/put-go/xr-install/refs/heads/master/install.sh) --vim"
 echo "  • 查看帮助: bash <(wget -qO- https://raw.githubusercontent.com/put-go/xr-install/refs/heads/master/install.sh) --help"
 echo ""
