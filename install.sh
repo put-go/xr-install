@@ -352,6 +352,109 @@ check_server_specs() {
     fi
 }
 
+install_gost() {
+    # GOST 官方安装脚本暂不适配 Alpine，本脚本保持原有行为直接跳过。
+    if [ "$OS_TYPE" = "alpine" ]; then
+        log_step "跳过 GOST 安装（Alpine 系统不支持）"
+        log_info "检测到 Alpine 系统，GOST 安装已跳过"
+        log_info "Alpine 系统可使用其他轻量级代理工具"
+        return 0
+    fi
+
+    log_step "安装 GOST..."
+
+    if [ -n "$GOST_CHOICE" ]; then
+        REPLY="$GOST_CHOICE"
+        log_info "GOST 安装选项: $GOST_CHOICE"
+    else
+        read -p "是否安装 GOST？(y/n，默认n): " -n 1 -r
+        echo
+    fi
+
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        if command -v gost >/dev/null 2>&1; then
+            log_info "检测到 GOST 已安装，跳过重复安装"
+        else
+            log_info "开始安装 GOST..."
+
+            set +e
+            bash <(curl -fsSL https://github.com/go-gost/gost/raw/master/install.sh)
+            GOST_EXIT_CODE=$?
+            set -e
+
+            if [ $GOST_EXIT_CODE -eq 0 ]; then
+                log_info "✓ GOST 安装完成"
+            else
+                log_warn "GOST 安装可能失败（退出码: $GOST_EXIT_CODE），请手动检查"
+            fi
+        fi
+
+        if command -v gost >/dev/null 2>&1; then
+            GOST_VERSION=$(gost -V 2>/dev/null | head -n 1 || echo "未知版本")
+            log_info "GOST 版本: $GOST_VERSION"
+
+            log_info "创建 GOST 配置目录..."
+            mkdir -p /etc/gost
+
+            if [ ! -f /etc/gost/gost.yaml ]; then
+                log_info "创建 GOST 示例配置文件..."
+                cat > /etc/gost/gost.yaml << 'GOSTEOF'
+# GOST 配置文件示例
+# 请根据实际需求修改此配置
+
+# 服务配置
+services:
+  - name: service-0
+    addr: ":8080"
+    handler:
+      type: auto
+    listener:
+      type: tcp
+GOSTEOF
+                log_info "已创建示例配置: /etc/gost/gost.yaml"
+            else
+                log_info "GOST 配置已存在，跳过示例配置写入"
+            fi
+
+            GOST_SERVICE_CONTENT=$(cat << 'SERVICEEOF'
+[Unit]
+Description=Gost Proxy Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/etc/gost
+ExecStart=/usr/local/bin/gost -C /etc/gost/gost.yaml
+StandardOutput=null
+StandardError=null
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+SERVICEEOF
+)
+
+            if ensure_file_content "/etc/systemd/system/gost.service" "$GOST_SERVICE_CONTENT"; then
+                log_info "配置 GOST 服务..."
+                systemctl daemon-reload
+                log_info "✓ GOST 服务文件已更新"
+            else
+                log_info "GOST 服务文件无变化，跳过重写"
+            fi
+            log_warn "注意: GOST 未启动也未设置开机自启"
+            log_info "提示: 修改配置后使用以下命令管理："
+            log_info "  • 启动服务: systemctl start gost"
+            log_info "  • 设置开机自启: systemctl enable gost"
+            log_info "  • 同时启动并开机自启: systemctl enable --now gost"
+        fi
+    else
+        log_info "已跳过 GOST 安装"
+    fi
+}
+
 # 处理命令行参数
 INSTALL_TARGET=""
 SCRIPT_ACTION=""
@@ -373,7 +476,7 @@ show_help() {
     echo "  --no-v2bx-generate  V2bX 安装时不自动生成配置文件"
     echo "  --v2bx-generate     V2bX 安装时自动生成配置文件"
     echo "  --no-gost           跳过 GOST 安装"
-    echo "  --gost              安装 GOST"
+    echo "  --gost              仅安装 GOST；与 --xrayr/--v2bx 同用时在完整流程中安装 GOST"
     echo "  --no-bench          跳过服务器性能测试"
     echo "  --bench             执行服务器性能测试"
     echo "  --no-nezha          跳过 Nezha 监控探针安装"
@@ -465,6 +568,10 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+if [ "$GOST_CHOICE" = "y" ] && [ -z "$INSTALL_TARGET" ] && [ -z "$SCRIPT_ACTION" ]; then
+    SCRIPT_ACTION="gost"
+fi
+
 if [ "$SCRIPT_ACTION" = "vim" ]; then
     check_root
     configure_vim
@@ -475,6 +582,14 @@ if [ "$SCRIPT_ACTION" = "dat" ]; then
     check_root
     download_geosite
     download_geoip
+    exit 0
+fi
+
+if [ "$SCRIPT_ACTION" = "gost" ]; then
+    check_root
+    OS_TYPE=$(detect_os)
+    log_info "检测到系统类型: $OS_TYPE"
+    install_gost
     exit 0
 fi
 
@@ -733,104 +848,8 @@ fi
 # ============================================
 # 步骤 3: 安装 GOST（仅非 Alpine 系统）
 # ============================================
-if [ "$OS_TYPE" != "alpine" ]; then
-    log_step "3. 安装 GOST..."
-
-    if [ -n "$GOST_CHOICE" ]; then
-        REPLY="$GOST_CHOICE"
-        log_info "GOST 安装选项: $GOST_CHOICE"
-    else
-        read -p "是否安装 GOST？(y/n，默认n): " -n 1 -r
-        echo
-    fi
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        if command -v gost >/dev/null 2>&1; then
-            log_info "检测到 GOST 已安装，跳过重复安装"
-        else
-            log_info "开始安装 GOST..."
-
-            # 临时禁用 set -e 避免 GOST 安装脚本的退出码影响
-            set +e
-            bash <(curl -fsSL https://github.com/go-gost/gost/raw/master/install.sh)
-            GOST_EXIT_CODE=$?
-            set -e
-
-            if [ $GOST_EXIT_CODE -eq 0 ]; then
-                log_info "✓ GOST 安装完成"
-            else
-                log_warn "GOST 安装可能失败（退出码: $GOST_EXIT_CODE），请手动检查"
-            fi
-        fi
-
-        if command -v gost >/dev/null 2>&1; then
-            GOST_VERSION=$(gost -V 2>/dev/null | head -n 1 || echo "未知版本")
-            log_info "GOST 版本: $GOST_VERSION"
-
-            log_info "创建 GOST 配置目录..."
-            mkdir -p /etc/gost
-
-            if [ ! -f /etc/gost/gost.yaml ]; then
-                log_info "创建 GOST 示例配置文件..."
-                cat > /etc/gost/gost.yaml << 'GOSTEOF'
-# GOST 配置文件示例
-# 请根据实际需求修改此配置
-
-# 服务配置
-services:
-  - name: service-0
-    addr: ":8080"
-    handler:
-      type: auto
-    listener:
-      type: tcp
-GOSTEOF
-                log_info "已创建示例配置: /etc/gost/gost.yaml"
-            else
-                log_info "GOST 配置已存在，跳过示例配置写入"
-            fi
-
-            GOST_SERVICE_CONTENT=$(cat << 'SERVICEEOF'
-[Unit]
-Description=Gost Proxy Service
-After=network.target
-
-[Service]
-Type=simple
-User=root
-Group=root
-WorkingDirectory=/etc/gost
-ExecStart=/usr/local/bin/gost -C /etc/gost/gost.yaml
-StandardOutput=null
-StandardError=null
-Restart=on-failure
-RestartSec=5s
-
-[Install]
-WantedBy=multi-user.target
-SERVICEEOF
-)
-
-            if ensure_file_content "/etc/systemd/system/gost.service" "$GOST_SERVICE_CONTENT"; then
-                log_info "配置 GOST 服务..."
-                systemctl daemon-reload
-                log_info "✓ GOST 服务文件已更新"
-            else
-                log_info "GOST 服务文件无变化，跳过重写"
-            fi
-            log_warn "注意: GOST 未启动也未设置开机自启"
-            log_info "提示: 修改配置后使用以下命令管理："
-            log_info "  • 启动服务: systemctl start gost"
-            log_info "  • 设置开机自启: systemctl enable gost"
-            log_info "  • 同时启动并开机自启: systemctl enable --now gost"
-        fi
-    else
-        log_info "已跳过 GOST 安装"
-    fi
-else
-    log_step "3. 跳过 GOST 安装（Alpine 系统不支持）"
-    log_info "检测到 Alpine 系统，GOST 安装已跳过"
-    log_info "Alpine 系统可使用其他轻量级代理工具"
-fi
+log_step "3. GOST 安装检查..."
+install_gost
 
 # ============================================
 # 步骤 4: 创建配置目录
